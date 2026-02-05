@@ -18,8 +18,7 @@ public class FullCockpitUI : MonoBehaviour
     public Image imgHeat;
     public Image imgEnergy; // 能量条
     public TextMeshProUGUI txtAmmo;
-    public TextMeshProUGUI txtLevel;
-
+    
     [Header("=== 模块指示灯 (Image) ===")]
     public Image lightChassis;
     public Image lightShooter;
@@ -29,21 +28,23 @@ public class FullCockpitUI : MonoBehaviour
 
     [Header("=== 小地图系统 ===")]
     public RectTransform minimapContent; // 地图容器
-    public GameObject iconPrefabSelf;    // 自己的图标(箭头)
-    public GameObject iconPrefabEnemy;   // 敌人图标(红点)
-    public GameObject iconPrefabTeammate;// 队友图标(蓝点)
+    public GameObject iconPrefabSelf;    // 自己的图标
+    public GameObject iconPrefabEnemy;   // 敌人图标
+    public GameObject iconPrefabTeammate;// 队友图标
 
-    // 场地实际尺寸 (米) [Page 32] 28m x 15m
+    // 场地实际尺寸 (米)
     const float FIELD_W = 28.0f;
     const float FIELD_H = 15.0f;
 
-    // 地图图标缓存池
+    // 地图图标缓存
     private Dictionary<int, RectTransform> mapIcons = new Dictionary<int, RectTransform>();
 
     void Update()
     {
         if (DataManager.Instance == null) return;
         var data = DataManager.Instance;
+        // 获取自己的机器人信息对象
+        var myRobot = data.MyRobot; 
 
         // 1. 更新顶部
         int min = data.MatchTime / 60;
@@ -51,26 +52,29 @@ public class FullCockpitUI : MonoBehaviour
         txtTime.text = $"{min:00}:{sec:00}";
         txtGold.text = data.MyGold.ToString();
         
-        // 假设基地满血5000，前哨站1500
+        // 基地血量
         imgBaseHP.fillAmount = (float)data.BaseHP / 5000f;
         txtBaseHPNum.text = data.BaseHP.ToString();
         imgOutpostHP.fillAmount = (float)data.OutpostHP / 1500f;
 
-        // 2. 更新自身
-        if (data.MyMaxHP > 0)
+        // 2. 更新自身 (从 myRobot 对象里取值)
+        if (myRobot.maxHp > 0)
         {
-            imgSelfHP.fillAmount = (float)data.MyHP / (float)data.MyMaxHP;
-            txtSelfHPNum.text = $"{data.MyHP}/{data.MyMaxHP}";
+            imgSelfHP.fillAmount = (float)myRobot.currentHp / (float)myRobot.maxHp;
+            txtSelfHPNum.text = $"{myRobot.currentHp}/{myRobot.maxHp}";
         }
-        if (data.MyMaxHeat > 0) imgHeat.fillAmount = data.MyHeat / (float)data.MyMaxHeat;
-        // 假设底盘能量上限 (如60或200，取决于等级)
-        imgEnergy.fillAmount = (float)data.MyChassisEnergy / 200f; 
-        txtAmmo.text = data.MyAmmo.ToString();
+        
+        if (myRobot.maxHeat > 0) 
+            imgHeat.fillAmount = myRobot.currentHeat / (float)myRobot.maxHeat;
+            
+        // 假设底盘能量上限200
+        imgEnergy.fillAmount = (float)myRobot.chassisEnergy / 200f; 
+        txtAmmo.text = myRobot.currentAmmo.ToString();
         
         // 3. 更新模块灯
-        lightChassis.color = data.Module_Chassis ? colorOK : colorWarn;
-        lightShooter.color = data.Module_Shooter ? colorOK : colorWarn;
-        lightVideo.color = data.Module_Video ? colorOK : colorWarn;
+        lightChassis.color = myRobot.modChassis ? colorOK : colorWarn;
+        lightShooter.color = myRobot.modShooter ? colorOK : colorWarn;
+        lightVideo.color = myRobot.modVideo ? colorOK : colorWarn;
 
         // 4. 更新小地图
         UpdateMinimap();
@@ -85,10 +89,10 @@ public class FullCockpitUI : MonoBehaviour
         foreach (var kvp in data.MapData)
         {
             int id = kvp.Key;
-            RobotMapInfo info = kvp.Value;
+            RobotInfo info = kvp.Value;
 
-            // 过滤：如果是我自己，或者最近没有更新(雷达丢失)，或者已死亡
-            bool show = info.isVisible && info.hp > 0 && (Time.time - info.lastUpdate < 2.0f || id == data.MyID);
+            // 过滤显示：自己永远显示；其他人只有 isVisible=true 且最近有更新才显示
+            bool show = (id == data.MyID) || (info.isVisible && (Time.time - info.lastUpdate < 2.0f));
             
             if (!show)
             {
@@ -111,14 +115,13 @@ public class FullCockpitUI : MonoBehaviour
             RectTransform icon = mapIcons[id];
             icon.gameObject.SetActive(true);
 
-            // 坐标映射：假设 (0,0) 是场地左下角
-            // 需要归一化 (0~1) 然后乘地图尺寸
-            float normX = Mathf.Clamp01(info.x / FIELD_W);
-            float normY = Mathf.Clamp01(info.y / FIELD_H);
+            // 坐标映射
+            float normX = Mathf.Clamp01(info.pos.x / FIELD_W);
+            float normY = Mathf.Clamp01(info.pos.z / FIELD_H); // 注意：Unity中用 Z 代表平面纵向
 
             icon.anchoredPosition = new Vector2(normX * mapW, normY * mapH);
             
-            // 只有自己才旋转图标，其他人一般只显示点
+            // 只有自己显示旋转
             if (id == data.MyID)
             {
                 icon.localRotation = Quaternion.Euler(0, 0, -info.yaw);
@@ -126,8 +129,6 @@ public class FullCockpitUI : MonoBehaviour
         }
     }
 
-    // 简单判断队友：ID < 100 是红方， > 100 是蓝方
-    // 如果我 < 100 且 目标 < 100 -> 队友
     bool IsTeammate(int targetID, int myID)
     {
         bool targetRed = targetID < 100;
