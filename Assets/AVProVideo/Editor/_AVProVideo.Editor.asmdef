@@ -1,0 +1,24 @@
+{
+	"name": "AVProVideo.Editor",
+	"rootNamespace": "",
+	"references": [
+		"AVProVideo.Runtime"
+	],
+	"includePlatforms": [
+		"Editor"
+	],
+	"excludePlatforms": [],
+	"allowUnsafeCode": false,
+	"overrideReferences": false,
+	"precompiledReferences": [],
+	"autoReferenced": true,
+	"defineConstraints": [],
+	"versionDefines": [
+		{
+			"name": "com.unity.xr.compositionlayers",
+			"expression": "2.0.0",
+			"define": "AVPRO_VIDEO_XR_COMPOSITION_LAYERS"
+		}
+	],
+	"noEngineReferences": false
+}
