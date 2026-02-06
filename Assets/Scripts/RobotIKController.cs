@@ -12,13 +12,9 @@ public class JointConfig
 
 public class RobotIKController : MonoBehaviour
 {
-    [Header("=== 1. 物理拟真 (针对J1优化) ===")]
-    [Tooltip("关节最大旋转速度 (度/秒)。建议 90-120")]
+    [Header("=== 1. 物理拟真 ===")]
     public float maxJointSpeed = 120.0f;
-    
-    [Tooltip("J1(基座)的独立限速系数。通常基座转动惯量最大，应该转得最慢。建议 0.5 - 0.8")]
-    [Range(0.1f, 1.0f)] public float j1SpeedMultiplier = 0.6f; // <--- 新增：让J1转得比别的关节慢
-    
+    [Range(0.1f, 1.0f)] public float j1SpeedMultiplier = 0.6f;
     public bool enablePhysicsSmoothing = true;
 
     [Header("=== 2. 自动测量 ===")]
@@ -37,8 +33,11 @@ public class RobotIKController : MonoBehaviour
     [Header("=== 5. IK 稳定性设置 ===")]
     [Range(0.1f, 1f)] public float iterationDamping = 0.6f; 
     
-    [Tooltip("J1 软死区半径。距离基座越近，J1 越难转动。")]
-    public float j1SoftDeadZone = 0.3f; // <--- 增大这个值可以减少正前方的抽搐
+    // 【修复点】补回了这两个变量定义
+    [Tooltip("J1 硬死区：小于此距离直接不转")]
+    public float j1DeadZoneRadius = 0.1f; 
+    [Tooltip("J1 软死区：小于此距离开始降低转速，防止抽搐")]
+    public float j1SoftDeadZone = 0.3f;
 
     [Range(0f, 0.5f)] public float inputSmoothTime = 0.1f;
 
@@ -87,7 +86,6 @@ public class RobotIKController : MonoBehaviour
         if (jointLimits.Length != 7) Array.Resize(ref jointLimits, 7);
         propBlock = new MaterialPropertyBlock();
 
-        // 1. 自动测量
         if (autoCalibrate && visual_J2 && ref_J3_Pivot && ref_J4_Pivot)
         {
             L1_BigArm = Vector3.Distance(visual_J2.position, ref_J3_Pivot.position);
@@ -98,23 +96,18 @@ public class RobotIKController : MonoBehaviour
             if(visual_J6 && visual_J7) Offset_J6_to_J7 = visual_J6.InverseTransformPoint(visual_J7.position);
         }
         
-        // 2. 初始化平滑变量
         if (visual_J7) 
         {
             smoothedInputPos = visual_J7.position;
             smoothedInputRot = visual_J7.rotation;
         }
 
-        // 3. 【关键修复】从视觉模型倒推初始角度，防止启动时 J1 归零瞬移
         InitializeAnglesFromVisuals();
-
         BuildGhostRig();
     }
 
     void InitializeAnglesFromVisuals()
     {
-        // 读取当前的 Transform 角度作为初始值
-        // 注意：这里需要考虑之前的 invert 逻辑反向读取
         if(visual_J1) outAngles[0] = NormalizeAngle(visual_J1.localEulerAngles.y);
         if(visual_J2) outAngles[1] = NormalizeAngle(invert_J2 ? visual_J2.localEulerAngles.x : -visual_J2.localEulerAngles.x);
         if(visual_J3) outAngles[2] = NormalizeAngle(invert_J3 ? visual_J3.localEulerAngles.x : -visual_J3.localEulerAngles.x);
@@ -122,8 +115,6 @@ public class RobotIKController : MonoBehaviour
         if(visual_J5) outAngles[4] = NormalizeAngle(visual_J5.localEulerAngles.z);
         if(visual_J6) outAngles[5] = NormalizeAngle(visual_J6.localEulerAngles.x);
         if(visual_J7) outAngles[6] = NormalizeAngle(visual_J7.localEulerAngles.z);
-
-        // 同步 IK 目标，防止物理层把它们拉回去
         Array.Copy(outAngles, targetIKAngles, 7);
     }
 
@@ -131,20 +122,17 @@ public class RobotIKController : MonoBehaviour
     { 
         activeTarget = target; 
         isTracking = true;
-        
         Vector3 rawTargetPos = target.position + target.TransformDirection(gripOffset);
         smoothedInputPos = rawTargetPos;
         smoothedInputRot = target.rotation;
         currentVelocityPos = Vector3.zero;
-        
-        // 抓取时，再次同步目标，确保平滑启动
         Array.Copy(outAngles, targetIKAngles, 7);
     }
 
     public void StopTracking() { activeTarget = null; isTracking = false; }
-
-    // ... GetPacketData 保持不变 ...
-    public byte[] GetPacketData() {
+    
+    public byte[] GetPacketData()
+    {
         byte[] data = new byte[30];
         for(int i=0; i<7; i++) {
             short val = (short)(NormalizeAngle(outAngles[i]) * 100);
@@ -156,7 +144,6 @@ public class RobotIKController : MonoBehaviour
 
     void Update()
     {
-        // J7 摇杆
         float joystickY = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch).y;
         targetIKAngles[6] += joystickY * j7RotationSpeed * Time.deltaTime;
 
@@ -177,15 +164,11 @@ public class RobotIKController : MonoBehaviour
     void SimulatePhysicsMotors()
     {
         float dt = Time.deltaTime;
-
         for (int i = 0; i < 7; i++)
         {
             if (enablePhysicsSmoothing)
             {
-                // 【关键修复】针对 J1 (索引0) 应用独立的限速倍率
-                // J1 这种大惯量关节通常转得比手腕慢
                 float speed = (i == 0) ? (maxJointSpeed * j1SpeedMultiplier) : maxJointSpeed;
-                
                 outAngles[i] = Mathf.MoveTowardsAngle(outAngles[i], targetIKAngles[i], speed * dt);
             }
             else
@@ -195,11 +178,8 @@ public class RobotIKController : MonoBehaviour
         }
     }
 
-    // ... BuildGhostRig, CreateGhost, RobustDecompose, ApplyToVisuals 等保持不变 ...
-    // 为节省篇幅，这里复用上一版代码，请确保 BuildGhostRig 等函数都在
-    // 下面只列出修改了逻辑的 SolveIterativeIK
-
-    void BuildGhostRig() { /* 复用上一版 */ 
+    void BuildGhostRig()
+    {
         if(ghostRoot) Destroy(ghostRoot);
         ghostRoot = new GameObject("IK_Math_Solver");
         ghostRoot.transform.SetParent(transform);
@@ -217,13 +197,72 @@ public class RobotIKController : MonoBehaviour
         ghost_J6.localPosition = Offset_J5_to_J6;
         g_J7.localPosition = Offset_J6_to_J7;
     }
-    
-    Transform CreateGhost(string name, Transform parent) {
+
+    Transform CreateGhost(string name, Transform parent)
+    {
         GameObject g = new GameObject(name);
         g.transform.SetParent(parent);
         g.transform.localPosition = Vector3.zero;
         g.transform.localRotation = Quaternion.identity;
         return g.transform;
+    }
+
+    void SolveIterativeIK(Vector3 targetPos, Quaternion targetRot)
+    {
+        float currentJ1 = targetIKAngles[0]; 
+
+        for (int i = 0; i < 5; i++)
+        {
+            Quaternion baseRot = Quaternion.Euler(0, currentJ1, 0);
+            Quaternion wristLocal = Quaternion.Inverse(baseRot) * targetRot;
+            Vector3 wristAngles = RobustDecompose(wristLocal);
+            
+            float j4 = wristAngles.y;
+            float j5 = wristAngles.z;
+            float j6 = wristAngles.x;
+
+            ghost_J4.localEulerAngles = new Vector3(0, j4, 0);
+            ghost_J5.localEulerAngles = new Vector3(0, 0, j5);
+            ghost_J6.localEulerAngles = new Vector3(j6, 0, 0);
+
+            // 1. 获取腕部形状向量 (Ghost Rig J7 相对于 Platform)
+            Vector3 wristOffsetLocal = ghost_Platform.InverseTransformPoint(g_J7.position);
+            
+            // 2. 旋转并变换到世界空间
+            Vector3 wristOffsetRotated = baseRot * wristOffsetLocal;
+            Vector3 wristOffsetWorld = transform.TransformDirection(wristOffsetRotated);
+
+            // 3. 反推 J4 平台目标
+            Vector3 platformTarget = targetPos - wristOffsetWorld;
+
+            // 4. 大臂定位解算
+            Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
+            Vector3 rootLocalTarget = transform.InverseTransformPoint(j3TipTarget);
+            
+            float targetJ1 = 0;
+            float flatDist = new Vector2(rootLocalTarget.x, rootLocalTarget.z).magnitude;
+
+            if (flatDist > j1DeadZoneRadius) 
+            {
+                float rawJ1 = Mathf.Atan2(rootLocalTarget.x, rootLocalTarget.z) * Mathf.Rad2Deg;
+                float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
+                targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+            }
+            else 
+            {
+                targetJ1 = currentJ1; 
+            }
+
+            currentJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+            targetIKAngles[0] = currentJ1;
+            
+            SolveArmPosition(rootLocalTarget, currentJ1);
+
+            targetIKAngles[3] = j4;
+            targetIKAngles[4] = NormalizeAngle(j5);
+            targetIKAngles[5] = j6;
+        }
+        lastJ4Angle = targetIKAngles[3];
     }
     
     Vector3 RobustDecompose(Quaternion q) {
@@ -231,7 +270,6 @@ public class RobotIKController : MonoBehaviour
         float yaw;
         if (Mathf.Abs(forward.y) > 0.98f) yaw = lastJ4Angle; 
         else yaw = Mathf.Atan2(forward.x, forward.z) * Mathf.Rad2Deg;
-
         Quaternion q_yaw = Quaternion.Euler(0, yaw, 0);
         Quaternion rem1 = Quaternion.Inverse(q_yaw) * q;
         Vector3 right = rem1 * Vector3.right;
@@ -242,6 +280,21 @@ public class RobotIKController : MonoBehaviour
         return new Vector3(NormalizeAngle(pitch), NormalizeAngle(yaw), NormalizeAngle(roll));
     }
     
+    void SolveArmPosition(Vector3 target, float j1_angle) {
+        float shoulderHeight = visual_J2.localPosition.y;
+        float flatDist = new Vector2(target.x, target.z).magnitude; 
+        float y = target.y - shoulderHeight;
+        float D = Mathf.Sqrt(flatDist * flatDist + y * y);
+        D = Mathf.Clamp(D, 0.01f, L1_BigArm + L2_SmallArm - 0.001f);
+        float cosAlpha = (L1_BigArm * L1_BigArm + D * D - L2_SmallArm * L2_SmallArm) / (2 * L1_BigArm * D);
+        float alpha = Mathf.Acos(Mathf.Clamp(cosAlpha, -1f, 1f));
+        float beta = Mathf.Atan2(y, flatDist);
+        float cosGamma = (L1_BigArm * L1_BigArm + L2_SmallArm * L2_SmallArm - D * D) / (2 * L1_BigArm * L2_SmallArm);
+        float gamma = Mathf.Acos(Mathf.Clamp(cosGamma, -1f, 1f));
+        targetIKAngles[1] = (beta + alpha) * Mathf.Rad2Deg; 
+        targetIKAngles[2] = (Mathf.PI - gamma) * Mathf.Rad2Deg; 
+    }
+
     void ApplyLimitsAndWarnings() {
         for (int i = 0; i < 7; i++) {
             ClampSingleJoint(i);
@@ -283,87 +336,7 @@ public class RobotIKController : MonoBehaviour
         visual_J7.localRotation = Quaternion.Euler(0, 0, outAngles[6]);
     }
 
-    void SolveIterativeIK(Vector3 targetPos, Quaternion targetRot)
-    {
-        float currentJ1 = targetIKAngles[0]; // 从目标值开始迭代
-
-        for (int i = 0; i < 5; i++)
-        {
-            Quaternion baseRot = Quaternion.Euler(0, currentJ1, 0);
-            Quaternion wristLocal = Quaternion.Inverse(baseRot) * targetRot;
-            Vector3 wristAngles = RobustDecompose(wristLocal);
-            
-            float j4 = wristAngles.y;
-            float j5 = wristAngles.z;
-            float j6 = wristAngles.x;
-
-            ghost_J4.localEulerAngles = new Vector3(0, j4, 0);
-            ghost_J5.localEulerAngles = new Vector3(0, 0, j5);
-            ghost_J6.localEulerAngles = new Vector3(j6, 0, 0);
-
-            Vector3 wristVector = g_J7.position - ghost_Platform.position;
-            Vector3 platformTarget = targetPos - wristVector;
-
-            Vector3 j3TipTarget = platformTarget + Vector3.up * J4_Drop_Offset;
-            Vector3 rootLocalTarget = transform.InverseTransformPoint(j3TipTarget);
-            
-            float targetJ1 = 0;
-            // 平面距离
-            float flatDist = new Vector2(rootLocalTarget.x, rootLocalTarget.z).magnitude;
-
-            // === 核心修复：J1 动态死区阻尼 ===
-            // 离中心越近，越不愿意改变 J1
-            if (flatDist > 0.01f) // 防止除0
-            {
-                float rawJ1 = Mathf.Atan2(rootLocalTarget.x, rootLocalTarget.z) * Mathf.Rad2Deg;
-                
-                // 软死区逻辑：当距离小于阈值时，插值权重降低
-                // 距离 0.1m 时，权重接近 0 (不转)；距离 > 0.3m 时，权重 1 (正常转)
-                float zoneFactor = Mathf.Clamp01((flatDist - 0.05f) / (j1SoftDeadZone - 0.05f));
-                
-                // 如果在死区深处，保持原来的角度；如果在外面，用新角度
-                targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
-            }
-            else
-            {
-                targetJ1 = currentJ1; 
-            }
-
-            // 迭代混合
-            currentJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
-
-            targetIKAngles[0] = currentJ1;
-            
-            SolveArmPosition(rootLocalTarget, currentJ1);
-
-            targetIKAngles[3] = j4;
-            targetIKAngles[4] = NormalizeAngle(j5);
-            targetIKAngles[5] = j6;
-        }
-        lastJ4Angle = targetIKAngles[3];
-    }
-    
-    void SolveArmPosition(Vector3 target, float j1_angle)
-    {
-        float shoulderHeight = visual_J2.localPosition.y;
-        float flatDist = new Vector2(target.x, target.z).magnitude; 
-        float y = target.y - shoulderHeight;
-
-        float D = Mathf.Sqrt(flatDist * flatDist + y * y);
-        D = Mathf.Clamp(D, 0.01f, L1_BigArm + L2_SmallArm - 0.001f);
-
-        float cosAlpha = (L1_BigArm * L1_BigArm + D * D - L2_SmallArm * L2_SmallArm) / (2 * L1_BigArm * D);
-        float alpha = Mathf.Acos(Mathf.Clamp(cosAlpha, -1f, 1f));
-        float beta = Mathf.Atan2(y, flatDist);
-        float cosGamma = (L1_BigArm * L1_BigArm + L2_SmallArm * L2_SmallArm - D * D) / (2 * L1_BigArm * L2_SmallArm);
-        float gamma = Mathf.Acos(Mathf.Clamp(cosGamma, -1f, 1f));
-
-        targetIKAngles[1] = (beta + alpha) * Mathf.Rad2Deg; 
-        targetIKAngles[2] = (Mathf.PI - gamma) * Mathf.Rad2Deg; 
-    }
-
-    float NormalizeAngle(float a)
-    {
+    float NormalizeAngle(float a) {
         while (a > 180) a -= 360;
         while (a < -180) a += 360;
         return a;
