@@ -97,7 +97,7 @@ LightmapSettings:
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
   m_LightingDataAsset: {fileID: 0}
-  m_LightingSettings: {fileID: 4890085278179872738, guid: b30e703134295e342956036a94b77749,
+  m_LightingSettings: {fileID: 4890085278179872738, guid: d6a228f2c8491584bab9425377b008f4,
     type: 2}
 --- !u!196 &4
 NavMeshSettings:
@@ -2204,7 +2204,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 1
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: http://clips.vorwaerts-gmbh.de/VfE_html5.mp4
+  m_Text: http://walterebert.com/playground/video/hls/sintel-trailer.m3u8
 --- !u!222 &854297858
 CanvasRenderer:
   m_ObjectHideFlags: 0
@@ -4658,7 +4658,7 @@ MonoBehaviour:
   m_CaretColor: {r: 0.19607843, g: 0.19607843, b: 0.19607843, a: 1}
   m_CustomCaretColor: 0
   m_SelectionColor: {r: 0.65882355, g: 0.80784315, b: 1, a: 0.7529412}
-  m_Text: http://clips.vorwaerts-gmbh.de/VfE_html5.mp4
+  m_Text: http://walterebert.com/playground/video/hls/sintel-trailer.m3u8
   m_CaretBlinkRate: 0.85
   m_CaretWidth: 1
   m_ReadOnly: 0

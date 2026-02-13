@@ -97,7 +97,7 @@ LightmapSettings:
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
   m_LightingDataAsset: {fileID: 0}
-  m_LightingSettings: {fileID: 4890085278179872738, guid: 83788767d3ead9a438ab756c4a111021,
+  m_LightingSettings: {fileID: 4890085278179872738, guid: 174da16827627164cbeb2e99d22285af,
     type: 2}
 --- !u!196 &4
 NavMeshSettings:
@@ -1988,6 +1988,7 @@ MonoBehaviour:
   _timeText: {fileID: 1569451787}
   _rewind: {fileID: 1984926580}
   _debug: {fileID: 3723658}
+  _snapshot: {fileID: 1633996707}
 --- !u!4 &503587045
 Transform:
   m_ObjectHideFlags: 0
@@ -4875,6 +4876,7 @@ MonoBehaviour:
   _timeText: {fileID: 619942351}
   _rewind: {fileID: 740532388}
   _debug: {fileID: 470945777}
+  _snapshot: {fileID: 706014351}
 --- !u!4 &1962404242
 Transform:
   m_ObjectHideFlags: 0

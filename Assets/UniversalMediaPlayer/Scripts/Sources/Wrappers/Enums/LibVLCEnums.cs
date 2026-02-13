@@ -28,12 +28,6 @@
         Error
     }
 
-    internal enum MediaSlaveType
-    {
-        Subtitle,
-        Audio
-    }
-
     internal enum MediaMetadatas
     {
         Title = 0,

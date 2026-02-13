@@ -3,7 +3,6 @@
     public interface IMediaListener:
         IPlayerOpeningListener,
         IPlayerBufferingListener,
-        IPlayerImageReadyListener,
         IPlayerPreparedListener,
         IPlayerPlayingListener,
         IPlayerPausedListener,
@@ -27,14 +26,9 @@
         void OnPlayerBuffering(float percentage);
     }
 
-    public interface IPlayerImageReadyListener
-    {
-        void OnPlayerImageReady(UnityEngine.Texture2D videoTexture);
-    }
-
     public interface IPlayerPreparedListener
     {
-        void OnPlayerPrepared(int videoWidth, int videoHeight);
+        void OnPlayerPrepared(UnityEngine.Texture2D videoTexture);
     }
 
     public interface IPlayerPlayingListener

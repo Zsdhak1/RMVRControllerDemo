@@ -1,7 +1,6 @@
 ﻿using System.IO;
 using System.Text.RegularExpressions;
 using UnityEngine;
-using UnityEngine.Networking;
 using UnityEngine.UI;
 
 namespace UMP
@@ -9,7 +8,6 @@ namespace UMP
     public class MediaPlayerHelper
     {
         private const string UMP_FOLDER_NAME = "/UniversalMediaPlayer";
-        private const string LOCAL_FILE_ROOT = "file:///";
 
         private delegate void ManageLogCallback(string msg, ManageLogLevel level);
         private ManageLogCallback _manageLogCallback;
@@ -69,9 +67,9 @@ namespace UMP
         /// <returns></returns>
         public static Texture2D GenVideoTexture(int width, int height)
         {
-            if (UMPSettings.RuntimePlatform == UMPSettings.Platforms.Win ||
-                UMPSettings.RuntimePlatform == UMPSettings.Platforms.Mac ||
-                UMPSettings.RuntimePlatform == UMPSettings.Platforms.Linux)
+            if (UMPSettings.SupportedPlatform == UMPSettings.Platforms.Win ||
+                UMPSettings.SupportedPlatform == UMPSettings.Platforms.Mac ||
+                UMPSettings.SupportedPlatform == UMPSettings.Platforms.Linux)
                 return new Texture2D(width, height, TextureFormat.BGRA32, false);
 
             return new Texture2D(width, height, TextureFormat.RGBA32, false);
@@ -85,9 +83,9 @@ namespace UMP
         /// <returns></returns>
         internal static Texture2D GenPluginTexture(int width, int height)
         {
-            if (UMPSettings.RuntimePlatform == UMPSettings.Platforms.Win ||
-                UMPSettings.RuntimePlatform == UMPSettings.Platforms.Mac ||
-                UMPSettings.RuntimePlatform == UMPSettings.Platforms.Linux)
+            if (UMPSettings.SupportedPlatform == UMPSettings.Platforms.Win ||
+                UMPSettings.SupportedPlatform == UMPSettings.Platforms.Mac ||
+                UMPSettings.SupportedPlatform == UMPSettings.Platforms.Linux)
                 return new Texture2D(width, height, TextureFormat.BGRA32, false);
 
             return new Texture2D(width, height, TextureFormat.RGBA32, false);
@@ -159,64 +157,23 @@ namespace UMP
         /// <summary>
         /// Check if file exists in 'StreamingAssets' folder
         /// </summary>
-        /// <param name="filePath">File name or path to file in 'StreamingAssets' folder</param>
+        /// <param name="fileName">File name or path to file in 'StreamingAssets' folder</param>
         /// <returns></returns>
         public static bool IsAssetsFile(string filePath)
         {
-            if (filePath.StartsWith(LOCAL_FILE_ROOT))
-                filePath = filePath.Substring(LOCAL_FILE_ROOT.Length);
-
-            if (!filePath.Contains(Application.streamingAssetsPath))
-                filePath = Path.Combine(Application.streamingAssetsPath, filePath);
-
-            if (UMPSettings.RuntimePlatform != UMPSettings.Platforms.Android)
+            filePath = filePath.Replace("file:///", "");
+            if (UMPSettings.SupportedPlatform != UMPSettings.Platforms.Android)
             {
-                return File.Exists(filePath);
+                return File.Exists(Path.Combine(Application.streamingAssetsPath, filePath));
             }
             else
             {
-#if UNITY_2017_2_OR_NEWER
-                var www = UnityWebRequest.Get(filePath);
-                www.SendWebRequest();
-                while (!www.isDone && www.downloadProgress <= 0) { }
-#else
-                var www = new WWW(filePath);
+                WWW www = new WWW(Path.Combine(Application.streamingAssetsPath, filePath));
                 while (!www.isDone && www.progress <= 0) { }
-#endif
                 bool result = string.IsNullOrEmpty(www.error);
                 www.Dispose();
-
                 return result;
             }
-        }
-
-        /// <summary>
-        /// Get correct madia data source path for file path
-        /// </summary>
-        /// <param name="relativePath">Relative path to the data file</param>
-        /// <returns></returns>
-        public static string GetDataSourcePath(string relativePath)
-        {
-            if (relativePath.StartsWith(LOCAL_FILE_ROOT))
-            {
-                relativePath = relativePath.Substring(LOCAL_FILE_ROOT.Length);
-
-                if (IsAssetsFile(relativePath))
-                    relativePath = Path.Combine(Application.streamingAssetsPath, relativePath);
-            }
-
-            if (UMPSettings.RuntimePlatform == UMPSettings.Platforms.Android)
-            {
-                var pathDR = GetDeviceRootPath() + relativePath;
-
-                if (File.Exists(pathDR))
-                    relativePath = pathDR;
-            }
-
-            if (File.Exists(relativePath))
-                relativePath = LOCAL_FILE_ROOT + relativePath;
-
-            return relativePath;
         }
     }
 }

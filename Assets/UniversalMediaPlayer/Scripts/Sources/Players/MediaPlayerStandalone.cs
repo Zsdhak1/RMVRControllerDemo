@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.IO;
 using UnityEngine;
 using UMP.Wrappers;
 
@@ -38,13 +39,13 @@ namespace UMP
         private bool _isPlaying;
         private bool _isLoad;
         private bool _isReady;
-        private bool _isImageReady;
         private bool _isTextureExist;
 
         private LogLevels _logDetail;
         private Action<PlayerManagerLogs.PlayerLog> _logListener;
-        private string _dataSource;
+        private Uri _dataSource;
         private PlayerBufferVideo _videoBuffer;
+        private PlayerBufferSound _soundBuffer;
         private PlayerManagerLogs _logManager;
         private PlayerManagerEvents _eventManager;
         private PlayerOptionsStandalone _options;
@@ -55,9 +56,6 @@ namespace UMP
         private GameObject[] _videoOutputObjects;
         private PlayerManagerAudios _audioManager;
         private GCHandle _audioDataHandle = default(GCHandle);
-
-        private delegate void ManageBufferSizeCallback(int width, int height);
-        private ManageBufferSizeCallback _manageBufferSizeCallback;
 
         private IEnumerator _updateVideoTextureEnum;
 
@@ -88,6 +86,12 @@ namespace UMP
                     _options.DirectAudioDevice = GetAudioDevice(_options.DirectAudioDevice);
 
                 _wrapper.NativeSetPixelsVerticalFlip(_options.FlipVertically);
+
+                if (_options.FixedVideoSize != Vector2.zero)
+                {
+                    _videoBuffer = new PlayerBufferVideo((int)_options.FixedVideoSize.x, (int)_options.FixedVideoSize.y);
+                    _wrapper.NativeSetPixelsBuffer(_videoBuffer.FramePixelsAddr, _videoBuffer.Width, _videoBuffer.Height);
+                }
 
                 if (_options.AudioOutputs != null && _options.AudioOutputs.Length > 0)
                 {
@@ -140,13 +144,10 @@ namespace UMP
 
             _wrapper.ExpandedVideoSetCallbacks(_playerObj, _lockPtr, IntPtr.Zero, _displayPtr, new IntPtr(_wrapper.NativeIndex));
 
-            if (_options.FixedVideoSize == Vector2.zero)
+            if (_videoBuffer == null)
                 _wrapper.ExpandedVideoSetFormatCallbacks(_playerObj, _formatSetupPtr, IntPtr.Zero);
             else
-                _wrapper.ExpandedVideoSetFormat(_playerObj, PlayerBufferVideo.Chroma, (int)_options.FixedVideoSize.x, (int)_options.FixedVideoSize.y, PlayerBufferVideo.CalculatePitch((int)_options.FixedVideoSize.x));
-
-            _manageBufferSizeCallback = InitBufferSize;
-            _wrapper.NativeSetBufferSizeCallback(Marshal.GetFunctionPointerForDelegate(_manageBufferSizeCallback));
+                _wrapper.ExpandedVideoSetFormat(_playerObj, _videoBuffer.Chroma, (uint)_videoBuffer.Width, (uint)_videoBuffer.Height, (uint)_videoBuffer.Pitch);
 
             if (_audioManager != null && _audioManager.IsValid)
             {
@@ -170,28 +171,6 @@ namespace UMP
             }
 
             Release();
-        }
-
-        private void InitBufferSize(int width, int height)
-        {
-            _wrapper.NativePixelsBufferRelease();
-
-            if (_videoBuffer != null)
-            {
-                if (_videoBuffer.Width != width ||
-                    _videoBuffer.Height != height)
-                {
-                    _videoBuffer.ClearFramePixels();
-                    _videoBuffer = null;
-                }
-            }
-
-            if (_videoBuffer == null)
-            {
-                _videoBuffer = new PlayerBufferVideo(width, height);
-                _wrapper.NativeSetPixelsBuffer(_videoBuffer.FramePixelsAddr, _videoBuffer.Width, _videoBuffer.Height);
-                _isTextureExist = false;
-            }
         }
 
         private string GetAudioDevice(string description)
@@ -364,6 +343,15 @@ namespace UMP
                         _framesCounter = FramesCounter;
                         UpdateFpsCounter(_framesCounter);
 
+                        if (_videoBuffer == null)
+                        {
+                            int width = _wrapper.NativeGetPixelsBufferWidth();
+                            int height = _wrapper.NativeGetPixelsBufferHeight();
+
+                            _videoBuffer = new PlayerBufferVideo(width, height);
+                            _wrapper.NativeSetPixelsBuffer(_videoBuffer.FramePixelsAddr, _videoBuffer.Width, _videoBuffer.Height);
+                        }
+
                         if (!_isTextureExist)
                         {
                             if (_videoTexture != null)
@@ -375,17 +363,11 @@ namespace UMP
                             _videoTexture = MediaPlayerHelper.GenPluginTexture(_videoBuffer.Width, _videoBuffer.Height);
                             MediaPlayerHelper.ApplyTextureToRenderingObjects(_videoTexture, _videoOutputObjects);
                             _wrapper.NativeSetTexture(_videoTexture.GetNativeTexturePtr());
+
                             _isTextureExist = true;
-                            _isImageReady = false;
                         }
 
                         GL.IssuePluginEvent(_wrapper.NativeGetUnityRenderCallback(), _wrapper.NativeIndex);
-
-                        if (!_isImageReady)
-                        {
-                            _eventManager.SetEvent(PlayerState.ImageReady, _videoTexture);
-                            _isImageReady = true;
-                        }
                     }
 
                     if (!_isReady && (hasVideo ? (_videoTexture != null && _videoBuffer != null) : tracks != null))
@@ -394,12 +376,12 @@ namespace UMP
 
                         if (_isLoad)
                         {
-                            _eventManager.ReplaceEvent(PlayerState.Paused, PlayerState.Prepared, new Vector2(VideoWidth, VideoHeight));
+                            _eventManager.ReplaceEvent(PlayerState.Paused, PlayerState.Prepared, _videoTexture);
                             Pause();
                         }
                         else
                         {
-                            _eventManager.SetEvent(PlayerState.Prepared, new Vector2(VideoWidth, VideoHeight));
+                            _eventManager.SetEvent(PlayerState.Prepared, _videoTexture);
                             _eventManager.SetEvent(PlayerState.Playing);
                         }
                     }
@@ -518,8 +500,6 @@ namespace UMP
             {
                 _eventManager.PlayerOpeningListener += listener.OnPlayerOpening;
                 _eventManager.PlayerBufferingListener += listener.OnPlayerBuffering;
-                _eventManager.PlayerImageReadyListener += listener.OnPlayerImageReady;
-                _eventManager.PlayerPreparedListener += listener.OnPlayerPrepared;
                 _eventManager.PlayerPlayingListener += listener.OnPlayerPlaying;
                 _eventManager.PlayerPausedListener += listener.OnPlayerPaused;
                 _eventManager.PlayerStoppedListener += listener.OnPlayerStopped;
@@ -534,8 +514,6 @@ namespace UMP
             {
                 _eventManager.PlayerOpeningListener -= listener.OnPlayerOpening;
                 _eventManager.PlayerBufferingListener -= listener.OnPlayerBuffering;
-                _eventManager.PlayerImageReadyListener -= listener.OnPlayerImageReady;
-                _eventManager.PlayerPreparedListener -= listener.OnPlayerPrepared;
                 _eventManager.PlayerPlayingListener -= listener.OnPlayerPlaying;
                 _eventManager.PlayerPausedListener -= listener.OnPlayerPaused;
                 _eventManager.PlayerStoppedListener -= listener.OnPlayerStopped;
@@ -566,9 +544,6 @@ namespace UMP
                     if (_logManager != null)
                         _logManager.StartListener();
 
-                    if (_options.FixedVideoSize != Vector2.zero)
-                        InitBufferSize((int)_options.FixedVideoSize.x, (int)_options.FixedVideoSize.y);
-
                     _wrapper.NativeUpdateFramesCounter(0);
                 }
 
@@ -592,6 +567,7 @@ namespace UMP
                 {
                     Stop();
                 }
+
             }
 
             return _isStarted;
@@ -642,7 +618,6 @@ namespace UMP
                 _isPlaying = false;
                 _isLoad = false;
                 _isReady = false;
-                _isImageReady = false;
 
                 _wrapper.NativeUpdateFramesCounter(0);
                 _wrapper.NativeClearAudioSamples(0);
@@ -657,12 +632,13 @@ namespace UMP
                         UnityEngine.Object.Destroy(_videoTexture);
                         _videoTexture = null;
                     }
+                }
 
-                    if (_videoBuffer != null)
-                    {
-                        _videoBuffer.ClearFramePixels();
-                        _videoBuffer = null;
-                    }
+                if (_videoBuffer != null && 
+                    _options.FixedVideoSize == Vector2.zero)
+                {
+                    _videoBuffer.ClearFramePixels();
+                    _videoBuffer = null;
                 }
 
                 if (_audioDataHandle.IsAllocated)
@@ -724,7 +700,7 @@ namespace UMP
             _vlcObj = IntPtr.Zero;
         }
 
-        public string DataSource
+        public Uri DataSource
         {
             get
             {
@@ -735,11 +711,13 @@ namespace UMP
                 if (_playerObj != IntPtr.Zero)
                 {
                     _dataSource = value;
+                    if (File.Exists(Application.streamingAssetsPath + _dataSource.AbsolutePath))
+                        _dataSource = new Uri(Application.streamingAssetsPath + _dataSource.AbsolutePath);
 
                     if (_mediaObj != IntPtr.Zero)
                         _wrapper.ExpandedMediaRelease(_mediaObj);
 
-                    _mediaObj = _wrapper.ExpandedMediaNewLocation(_vlcObj, MediaPlayerHelper.GetDataSourcePath(_dataSource));
+                    _mediaObj = _wrapper.ExpandedMediaNewLocation(_vlcObj, _dataSource.AbsoluteUri);
 
                     if (_arguments != null)
                     {

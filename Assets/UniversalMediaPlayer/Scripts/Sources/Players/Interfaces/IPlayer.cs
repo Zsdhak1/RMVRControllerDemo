@@ -20,7 +20,7 @@ namespace UMP
         void Stop();
         void Release();
 
-        string DataSource { get; set; }
+        Uri DataSource { get; set; }
         bool IsPlaying { get; }
         bool IsReady { get; }
         bool AbleToPlay { get; }

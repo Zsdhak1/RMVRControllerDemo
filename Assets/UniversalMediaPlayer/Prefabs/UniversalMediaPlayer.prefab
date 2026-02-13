@@ -61,7 +61,7 @@ MonoBehaviour:
   _logDetail: 0
   _lastEventMsg: 
   _desktopAudioOutputs: []
-  _desktopHardwareDecoding: 0
+  _desktopHardwareDecoding: -1
   _desktopFlipVertically: 1
   _desktopVideoBufferSize: 0
   _desktopOutputToFile: 0
@@ -100,9 +100,6 @@ MonoBehaviour:
     m_PersistentCalls:
       m_Calls: []
   _bufferingEvent:
-    m_PersistentCalls:
-      m_Calls: []
-  _imageReadyEvent:
     m_PersistentCalls:
       m_Calls: []
   _preparedEvent:

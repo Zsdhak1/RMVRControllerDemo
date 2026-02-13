@@ -4,39 +4,39 @@ using MQTTnet.Client;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using Google.Protobuf;
-using RoboMaster; 
+using RoboMaster; // 确保 Protobuf 生成的命名空间正确
 using System;
 
-// 聚合后的单机信息类
+
+
+// 聚合后的机器人信息类
 [System.Serializable]
 public class RobotInfo
 {
     public int id;
     public int team; // 0=Red, 1=Blue
     
-    // 静态数据
+    // 静态与动态数据
     public int type;
     public int level;
     public int maxHp;
-    public int maxHeat;
-    
-    // 动态数据
     public int currentHp;
+    public int maxHeat;
     public float currentHeat;
     public int currentAmmo;
     public int chassisEnergy;
     public bool isOutCombat;
     
-    // 位置
+    // 位置与姿态
     public Vector3 pos; 
     public float yaw;
     
-    // 模块状态
+    // 模块在线状态
     public bool modChassis;
     public bool modShooter;
     public bool modVideo;
     
-    // 地图显示用
+    // 逻辑状态
     public bool isVisible;    
     public float lastUpdate;  
     
@@ -45,6 +45,7 @@ public class RobotInfo
         this.id = id; 
         this.team = id < 100 ? 0 : 1;
         this.maxHp = 100; 
+        this.isVisible = false;
     }
 }
 
@@ -56,36 +57,32 @@ public class DataManager : MonoBehaviour
     public event Action OnConnectSuccess; 
     public event Action<string> OnConnectFail; 
     public event Action<string> OnGameEvent;
-    // [调试] 日志广播事件
     public event Action<string> OnDebugLog; 
-    // [新增] 专门用于发送数据的日志事件
     public event Action<string> OnTxLog; 
 
-    // ================== 公开数据 ==================
-
-    [Header("=== 比赛全局 ===")]
+    [Header("=== 比赛全局数据 ===")]
     public int MatchTime;
     public int CurrentStage;
-    public bool IsPaused;
     public int RedScore;
     public int BlueScore;
     
-    [Header("=== 基地数据 ===")]
+    [Header("=== 基地/前哨站血量 ===")]
     public int BaseHP; 
     public int OutpostHP; 
 
-    [Header("=== 己方经济 ===")]
+    [Header("=== 资源与等级 ===")]
     public int MyGold;
     public int MyTechLevel;
     
-    [Header("=== 自身状态引用 ===")]
+    [Header("=== 自身状态 ===")]
     public int MyID;
     public RobotInfo MyRobot; 
 
-    [Header("=== 全场机器人 ===")]
+    [Header("=== 全场机器人映射表 ===")]
     public Dictionary<int, RobotInfo> MapData = new Dictionary<int, RobotInfo>();
 
-    // =================================================
+    
+    public bool IsConnected => mqttClient != null && mqttClient.IsConnected;
 
     private IMqttClient mqttClient;
     private System.Threading.SynchronizationContext _context;
@@ -95,24 +92,25 @@ public class DataManager : MonoBehaviour
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+        
+        // 抓取主线程上下文用于 UI 更新
         _context = System.Threading.SynchronizationContext.Current;
-        InitializeData();
+        InitializeRobotMap();
     }
 
-    void InitializeData()
+    void InitializeRobotMap()
     {
+        // 初始化红蓝双方所有可能出现的机器人 ID
         int[] ids = { 1, 2, 3, 4, 5, 6, 7, 101, 102, 103, 104, 105, 106, 107 };
         foreach (int id in ids)
         {
             MapData[id] = new RobotInfo(id);
         }
-        MyID = 1; // 默认值，连接后会更新
+        MyID = 1; 
         MyRobot = MapData[1];
     }
 
-    void Start() { } 
-
-    // ================== 连接逻辑 ==================
+    // ================== MQTT 连接逻辑 (优化版) ==================
 
     public async void ConnectToServer()
     {
@@ -123,52 +121,83 @@ public class DataManager : MonoBehaviour
 
         var factory = new MqttFactory();
         mqttClient = factory.CreateMqttClient();
+        
         var options = new MqttClientOptionsBuilder()
             .WithTcpServer(ip, port)
-            .WithClientId("Quest3_" + UnityEngine.Random.Range(1000, 9999))
+            .WithClientId("Quest3_Cockpit_" + UnityEngine.Random.Range(1000, 9999))
             .WithTimeout(TimeSpan.FromSeconds(3))
             .WithCleanSession()
             .Build();
 
+        // 连接成功回调
         mqttClient.ConnectedAsync += async e =>
-        {
-            string msg = $"<color=green>[System] Connected to {ip}</color>";
-            Debug.Log(msg);
-            _context.Post(_ => OnDebugLog?.Invoke(msg), null); // 广播给DebugPanel
+    {
+        Debug.Log("<color=green>[DataManager] MQTT TCP Connected.</color>");
+        
+        // 建议在这里加上一个微小的延迟，或者直接广播
+        _context.Post(_ => {
+            // 安全分发事件：防止因为某个脚本报错导致整个跳转卡死
+            if (OnConnectSuccess != null)
+            {
+                foreach (Action handler in OnConnectSuccess.GetInvocationList())
+                {
+                    try {
+                        handler.Invoke();
+                    } catch (Exception ex) {
+                        Debug.LogError($"事件处理程序报错 (可能是图传脚本): {ex.Message}");
+                    }
+                }
+            }
+            OnDebugLog?.Invoke($"<color=green>[System] 已建立连接</color>");
+        }, null);
 
-            await SubscribeAll();
-            _context.Post(_ => OnConnectSuccess?.Invoke(), null);
-        };
+        _ = SubscribeTopicsAsync();
+        await Task.CompletedTask;
+    };
 
+        // 收到消息回调
         mqttClient.ApplicationMessageReceivedAsync += async e =>
         {
             byte[] payload = e.ApplicationMessage.Payload;
             string topic = e.ApplicationMessage.Topic;
+            // 将数据包抛回主线程解析
             _context.Post(_ => ParsePacket(topic, payload), null);
             await Task.CompletedTask;
         };
 
-        try { await mqttClient.ConnectAsync(options); }
-        catch (Exception ex) { 
-            Debug.LogError(ex); 
+        try 
+        { 
+            await mqttClient.ConnectAsync(options); 
+        }
+        catch (Exception ex) 
+        { 
+            Debug.LogError($"[MQTT Connect Error] {ex.Message}"); 
             _context.Post(_ => {
                 OnConnectFail?.Invoke(ex.Message);
-                OnDebugLog?.Invoke($"<color=red>[Error] {ex.Message}</color>");
+                OnDebugLog?.Invoke($"<color=red>[Error] 连接服务器失败: {ex.Message}</color>");
             }, null); 
         }
     }
 
-    private async Task SubscribeAll()
+    private async Task SubscribeTopicsAsync()
     {
         string[] topics = {
             "GameStatus", "GlobalUnitStatus", "GlobalLogisticsStatus", 
             "Event", "RobotStaticStatus", "RobotDynamicStatus", 
             "RobotModuleStatus", "RobotPosition", "RaderInfoToClient"
         };
-        foreach (var t in topics) await mqttClient.SubscribeAsync(new MqttTopicFilterBuilder().WithTopic(t).Build());
+        
+        foreach (var t in topics) 
+        {
+            try {
+                await mqttClient.SubscribeAsync(new MqttTopicFilterBuilder().WithTopic(t).Build());
+            } catch (Exception e) {
+                Debug.LogWarning($"订阅主题失败 {t}: {e.Message}");
+            }
+        }
     }
 
-    // ================== 解析逻辑 (含日志) ==================
+    // ================== 数据解析逻辑 ==================
 
     void ParsePacket(string topic, byte[] data)
     {
@@ -191,7 +220,6 @@ public class DataManager : MonoBehaviour
                     var unit = GlobalUnitStatus.Parser.ParseFrom(data);
                     BaseHP = (int)unit.BaseHealth;
                     OutpostHP = (int)unit.OutpostHealth;
-                    // 【关键修复】这里调用了 UpdateAllHP
                     UpdateAllHP(unit.RobotHealth);
                     parsedMsg = unit;
                     break;
@@ -204,7 +232,7 @@ public class DataManager : MonoBehaviour
 
                 case "Event":
                     var evt = RoboMaster.Event.Parser.ParseFrom(data);
-                    OnGameEvent?.Invoke($"Event: {evt.EventId}");
+                    OnGameEvent?.Invoke($"比赛事件: {evt.EventId}");
                     parsedMsg = evt;
                     break;
 
@@ -244,29 +272,27 @@ public class DataManager : MonoBehaviour
 
                 case "RaderInfoToClient":
                     var radar = RaderInfoToClient.Parser.ParseFrom(data);
-                    int tid = (int)radar.TargetRobotId;
-                    UpdateMapInfo(tid, radar.TargetPosX, radar.TargetPosY, radar.TargetAngle, -1);
+                    UpdateMapInfo((int)radar.TargetRobotId, radar.TargetPosX, radar.TargetPosY, radar.TargetAngle, -1);
                     parsedMsg = radar;
                     break;
                 
                 default:
-                    OnDebugLog?.Invoke($"<color=cyan>[RX] {topic}</color> ({data.Length} bytes)");
+                    // 未知主题仅记录
                     break;
             }
 
-            // 广播日志到 Debug Panel
+            // 广播调试日志
             if (parsedMsg != null)
             {
-                string log = $"<color=cyan>[RX] {topic}</color>: {parsedMsg.ToString().Replace("\n", " ")}";
-                OnDebugLog?.Invoke(log);
+                string logStr = $"<color=cyan>[RX] {topic}</color>: {parsedMsg.ToString().Replace("\n", " ")}";
+                OnDebugLog?.Invoke(logStr);
             }
         }
-        catch (Exception e) { Debug.LogWarning($"Parse Error {topic}: {e.Message}"); }
+        catch (Exception e) { Debug.LogWarning($"解析错误 {topic}: {e.Message}"); }
     }
 
-    // ================== 辅助函数 (被找回的遗失拼图) ==================
+    // ================== 内部辅助函数 ==================
 
-    // 【关键修复】这就是你报错缺少的函数
     void UpdateAllHP(Google.Protobuf.Collections.RepeatedField<uint> hps)
     {
         int[] redIDs = { 1, 2, 3, 4, 5, 6, 7 };
@@ -281,7 +307,8 @@ public class DataManager : MonoBehaviour
             if (id != 0 && MapData.ContainsKey(id))
             {
                 MapData[id].currentHp = (int)hps[i];
-                if (MapData[id].currentHp == 0) MapData[id].isVisible = false;
+                // 如果血量为0，在地图上暂时隐藏
+                if (MapData[id].currentHp <= 0) MapData[id].isVisible = false;
             }
         }
     }
@@ -290,34 +317,26 @@ public class DataManager : MonoBehaviour
     {
         if (MapData.ContainsKey(id))
         {
-            var t = MapData[id];
-            t.pos = new Vector3(x, 0, y);
-            t.yaw = angle;
-            if (hp != -1) t.currentHp = hp;
-            t.isVisible = true;
-            t.lastUpdate = Time.time;
+            var r = MapData[id];
+            r.pos = new Vector3(x, 0, y);
+            r.yaw = angle;
+            if (hp != -1) r.currentHp = hp;
+            r.isVisible = true;
+            r.lastUpdate = Time.time;
         }
     }
 
-    // ================== 发送指令 ==================
-
-    // ================== 发送指令 ==================
+    // ================== 指令发送接口 ==================
 
     public async void SendCommand<T>(string topic, T message) where T : IMessage
     {
         if (mqttClient == null || !mqttClient.IsConnected) return;
-        
-        // 过滤高频日志 (RemoteControl 每秒75次，不屏蔽会卡死UI)
-        // 如果你一定要看摇杆数据，可以注释掉这个 if
+
+        // 屏蔽高频遥控指令日志，防止控制台卡死
         if (topic != "RemoteControl")
         {
-            // 格式化日志内容
             string log = $"<color=yellow>[TX] {topic}</color>: {message.ToString().Replace("\n", " ")}";
-            
-            // 1. 广播给原来的总控制台 (可选，如果你希望总台也能看到发送数据)
             OnDebugLog?.Invoke(log);
-            
-            // 2. [新增] 广播给专门的发送监视面板
             OnTxLog?.Invoke(log);
         }
 
@@ -327,14 +346,15 @@ public class DataManager : MonoBehaviour
             .WithPayload(payload)
             .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtMostOnce)
             .Build();
+            
         await mqttClient.PublishAsync(mqttMsg);
     }
     
-    // 快捷发送接口
     public void SendRemoteControl(RoboMaster.RemoteControl cmd) => SendCommand("RemoteControl", cmd);
 
     private async void OnDestroy()
     {
         if (mqttClient != null) await mqttClient.DisconnectAsync();
     }
+    
 }

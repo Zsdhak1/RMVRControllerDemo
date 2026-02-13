@@ -97,7 +97,7 @@ LightmapSettings:
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
   m_LightingDataAsset: {fileID: 0}
-  m_LightingSettings: {fileID: 4890085278179872738, guid: 0003528bb0711e046b46443ae10e0619,
+  m_LightingSettings: {fileID: 4890085278179872738, guid: c426296b6c295b54394e7d68ff2ecfa1,
     type: 2}
 --- !u!196 &4
 NavMeshSettings:
@@ -262,7 +262,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
       propertyPath: _path
-      value: http://clips.vorwaerts-gmbh.de/VfE_html5.mp4
+      value: rtsp://184.72.239.149/vod/mp4:BigBuckBunny_115k.mov
       objectReference: {fileID: 0}
     - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
       propertyPath: _volume
@@ -302,7 +302,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
       propertyPath: _chosenPlatform
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
       propertyPath: _outputFilePath
@@ -367,10 +367,6 @@ PrefabInstance:
     - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
       propertyPath: _audioSources.Array.size
       value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
-      propertyPath: _desktopHardwareDecoding
-      value: -1
       objectReference: {fileID: 0}
     - target: {fileID: 11420564, guid: c404114afaafa3b4494665d1634c383c, type: 3}
       propertyPath: _playInBackgroundAndroid

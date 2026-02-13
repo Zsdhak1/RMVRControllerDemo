@@ -1,6 +1,6 @@
 fileFormatVersion: 2
-guid: d3651c1d2ab10874397a42e285f0476e
-timeCreated: 1481320424
+guid: d317ec4b278d60944b1c55ca14d1db2d
+timeCreated: 1481327450
 licenseType: Store
 PluginImporter:
   serializedVersion: 1
@@ -12,6 +12,9 @@ PluginImporter:
       enabled: 0
       settings:
         CPU: AnyCPU
+    Any:
+      enabled: 0
+      settings: {}
     Editor:
       enabled: 1
       settings:
@@ -50,9 +53,14 @@ PluginImporter:
       enabled: 1
       settings:
         CPU: AnyCPU
-    data:
+    WindowsStoreApps:
       enabled: 0
-      settings: {}
+      settings:
+        CPU: AnyCPU
+        DontProcess: False
+        PlaceholderPath: 
+        SDK: AnySDK
+        ScriptingBackend: AnyScriptingBackend
     iOS:
       enabled: 0
       settings:

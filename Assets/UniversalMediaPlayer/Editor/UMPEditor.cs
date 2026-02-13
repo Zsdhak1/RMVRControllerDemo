@@ -29,7 +29,6 @@ public class UMPEditor : Editor
     SerializedProperty _pathPreparedEventProp;
     SerializedProperty _openingEventProp;
     SerializedProperty _bufferingEventProp;
-    SerializedProperty _imageReadyEventProp;
     SerializedProperty _preparedEventProp;
     SerializedProperty _playingEventProp;
     SerializedProperty _pausedEventProp;
@@ -116,7 +115,6 @@ public class UMPEditor : Editor
         _pathPreparedEventProp = serializedObject.FindProperty("_pathPreparedEvent");
         _openingEventProp = serializedObject.FindProperty("_openingEvent");
         _bufferingEventProp = serializedObject.FindProperty("_bufferingEvent");
-        _imageReadyEventProp = serializedObject.FindProperty("_imageReadyEvent");
         _preparedEventProp = serializedObject.FindProperty("_preparedEvent");
         _playingEventProp = serializedObject.FindProperty("_playingEvent");
         _pausedEventProp = serializedObject.FindProperty("_pausedEvent");
@@ -176,7 +174,7 @@ public class UMPEditor : Editor
         serializedObject.Update();
 
         var umpEditor = (UniversalMediaPlayer)target;
-        var settings = UMPSettings.Instance;
+        var umpSettings = UMPSettings.GetSettings();
 
         EditorGUI.BeginChangeCheck();
 
@@ -234,7 +232,7 @@ public class UMPEditor : Editor
         if (GUILayout.Button("Advanced options", _useAdvancedProp.boolValue ? _toggleButton : EditorStyles.miniButtonMid))
         {
             _useAdvancedProp.boolValue = !_useAdvancedProp.boolValue;
-            _availablePlatforms = settings.GetInstalledPlatforms(UMPSettings.Desktop | UMPSettings.Mobile);
+            _availablePlatforms = UMPSettings.InstalledPlayerPlatforms(UMPSettings.Desktop | UMPSettings.Mobile);
         }
 
         if (_useAdvancedProp.boolValue)
@@ -264,7 +262,7 @@ public class UMPEditor : Editor
             EditorGUILayout.Space();
 
             if (_availablePlatforms == null || _availablePlatforms.Length <= 0)
-                _availablePlatforms = settings.GetInstalledPlatforms(UMPSettings.Desktop | UMPSettings.Mobile);
+                _availablePlatforms = UMPSettings.InstalledPlayerPlatforms(UMPSettings.Desktop | UMPSettings.Mobile);
 
             if (_availablePlatforms.Length <= 0)
             {
@@ -302,9 +300,9 @@ public class UMPEditor : Editor
                 if (_desktopHardwareDecodingProp.intValue == (int)PlayerOptions.States.Default)
                 {
                     var hardwareDecodingName = "DirectX Video Acceleration (DXVA) 2.0";
-                    if (UMPSettings.RuntimePlatform == UMPSettings.Platforms.Mac)
+                    if (UMPSettings.SupportedPlatform == UMPSettings.Platforms.Mac)
                         hardwareDecodingName = "Video Decode Acceleration Framework (VDA)";
-                    if (UMPSettings.RuntimePlatform == UMPSettings.Platforms.Linux)
+                    if (UMPSettings.SupportedPlatform == UMPSettings.Platforms.Linux)
                         hardwareDecodingName = "VA-API video decoder via DRM";
 
                     GUI.Label(GUILayoutUtility.GetLastRect(), new GUIContent("", hardwareDecodingName));
@@ -392,7 +390,7 @@ public class UMPEditor : Editor
                 for (int i = 0; i < playerValues.Length; i++)
                 {
                     var playerType = (PlayerOptionsAndroid.PlayerTypes)playerValues[i];
-                    if ((settings.PlayersAndroid & playerType) == playerType)
+                    if ((umpSettings.PlayersAndroid & playerType) == playerType)
                     {
                         playersNames.Add(playerType.ToString());
 
@@ -497,7 +495,7 @@ public class UMPEditor : Editor
                 for (int i = 0; i < playerValues.Length; i++)
                 {
                     var playerType = (PlayerOptionsIPhone.PlayerTypes)playerValues[i];
-                    if ((settings.PlayersIPhone & playerType) == playerType)
+                    if ((umpSettings.PlayersIPhone & playerType) == playerType)
                     {
                         playersNames.Add(playerType.ToString());
 
@@ -611,10 +609,10 @@ public class UMPEditor : Editor
             _fixedVideoHeightProp.intValue = -1;
         }
 
-        if (settings.UseExternalLibraries)
+        if (UMPSettings.GetSettings().UseExternalLibs)
         {
             if (_externalPath.Equals(string.Empty))
-                _externalPath = settings.GetLibrariesPath(UMPSettings.RuntimePlatform, true);
+                _externalPath = UMPSettings.RuntimePlatformLibraryPath(true);
 
             if (_externalPath != string.Empty)
             {
@@ -733,8 +731,7 @@ public class UMPEditor : Editor
 			EditorGUILayout.PropertyField(_pathPreparedEventProp, new GUIContent("Path Prepared"), true, GUILayout.MinWidth(50));
 			EditorGUILayout.PropertyField(_openingEventProp, new GUIContent("Opening"), true, GUILayout.MinWidth(50));
 			EditorGUILayout.PropertyField(_bufferingEventProp, new GUIContent("Buffering"), true, GUILayout.MinWidth(50));
-            EditorGUILayout.PropertyField(_imageReadyEventProp, new GUIContent("ImageReady"), true, GUILayout.MinWidth(50));
-            EditorGUILayout.PropertyField(_preparedEventProp, new GUIContent("Prepared"), true, GUILayout.MinWidth(50));
+			EditorGUILayout.PropertyField(_preparedEventProp, new GUIContent("Prepared"), true, GUILayout.MinWidth(50));
 			EditorGUILayout.PropertyField(_playingEventProp, new GUIContent("Playing"), true, GUILayout.MinWidth(50));
 			EditorGUILayout.PropertyField(_pausedEventProp, new GUIContent("Paused"), true, GUILayout.MinWidth(50));
 			EditorGUILayout.PropertyField(_stoppedEventProp, new GUIContent("Stopped"), true, GUILayout.MinWidth(50));

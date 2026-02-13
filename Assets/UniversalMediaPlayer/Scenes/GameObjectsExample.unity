@@ -97,7 +97,7 @@ LightmapSettings:
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
   m_LightingDataAsset: {fileID: 0}
-  m_LightingSettings: {fileID: 4890085278179872738, guid: 6cb19f3911912e648ac3cbad6712c0c7,
+  m_LightingSettings: {fileID: 4890085278179872738, guid: 88ca1847570dbe941953b13abe77e8cf,
     type: 2}
 --- !u!196 &4
 NavMeshSettings:
@@ -239,9 +239,6 @@ MonoBehaviour:
           m_StringArgument: 
           m_BoolArgument: 0
         m_CallState: 2
-  _imageReadyEvent:
-    m_PersistentCalls:
-      m_Calls: []
   _preparedEvent:
     m_PersistentCalls:
       m_Calls: []

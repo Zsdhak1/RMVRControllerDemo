@@ -64,7 +64,7 @@ namespace UMP
             }
             set
             {
-                var settings = UMPSettings.Instance;
+                var settings = UMPSettings.GetSettings();
                 var playerTypes = Enum.GetValues(typeof(PlayerTypes));
                 var result = PlayerTypes.Native;
                 

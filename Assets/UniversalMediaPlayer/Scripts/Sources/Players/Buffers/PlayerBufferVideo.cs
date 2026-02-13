@@ -26,8 +26,8 @@ internal class PlayerBufferVideo
     {
         _width = width;
         _height = height;
+        _pitch = _width * PIXEL_SIZE_RGBA / 8;
         _lines = _height;
-        _pitch = CalculatePitch(_width);
         _framePixels = new byte[_pitch * _lines];
     }
 
@@ -65,27 +65,19 @@ internal class PlayerBufferVideo
     }
 
     /// <summary>
-    /// Gets or sets the video frame pixels.
-    /// </summary>
-    public byte[] FramePixels
-    {
-        get { return _framePixels; }
-    }
-
-    /// <summary>
     /// Four-characters string identifying the chroma.
     /// </summary>
-    public static string Chroma
+    public string Chroma
     {
         get { return CHROMA; }
     }
 
     /// <summary>
-    /// Four-characters string identifying the chroma.
+    /// Gets or sets the video frame pixels.
     /// </summary>
-    public static int CalculatePitch(int width)
+    public byte[] FramePixels
     {
-        return width * PIXEL_SIZE_RGBA / 8;
+        get { return _framePixels; }
     }
 
     internal IntPtr FramePixelsAddr

@@ -28,7 +28,7 @@ namespace UMP
         /// <param name="options">Additional player options</param>
         public MediaPlayer(MonoBehaviour monoObject, GameObject[] videoOutputObjects, PlayerOptions options)
         {
-            var supportedPlatform = UMPSettings.RuntimePlatform;
+            var supportedPlatform = UMPSettings.SupportedPlatform;
 
             switch (supportedPlatform)
             {
@@ -43,7 +43,7 @@ namespace UMP
 
                     _playerObject = new MediaPlayerStandalone(monoObject, videoOutputObjects, standaloneOptions);
                     break;
-                /*
+
                 case UMPSettings.Platforms.iOS:
                     PlayerOptionsIPhone iphoneOptions = null;
                     if (options is PlayerOptionsIPhone)
@@ -63,10 +63,12 @@ namespace UMP
 
                     _playerObject = new MediaPlayerAndroid(monoObject, videoOutputObjects, androidOptions);
                     break;
-                    */
+
+				/*
                 case UMPSettings.Platforms.WebGL:
                     _playerObject = new MediaPlayerWebGL(monoObject, videoOutputObjects, options);
                     break;
+				*/
             }
 
             if (_playerObject is IPlayer)
@@ -247,7 +249,7 @@ namespace UMP
         /// Remote space (streams) - 'rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mov';
         /// 'StreamingAssets' folder - 'file:///myVideoFile.mp4';
         /// </summary>
-        public string DataSource
+        public Uri DataSource
         {
             get
             {

@@ -10,7 +10,6 @@ namespace UMP
         Empty,
         Opening,
         Buffering,
-        ImageReady,
         Prepared,
         Playing,
         Paused,
@@ -143,18 +142,9 @@ namespace UMP
 
                     break;
 
-                case PlayerState.ImageReady:
-                    if (_playerImageReadyListener != null)
-                        _playerImageReadyListener((Texture2D)eventValue.Arg);
-
-                    break;
-
                 case PlayerState.Prepared:
                     if (_playerPreparedListener != null)
-                    {
-                        var videoSize = (Vector2)eventValue.Arg;
-                        _playerPreparedListener((int)videoSize.x, (int)videoSize.y);
-                    }
+                        _playerPreparedListener((Texture2D)eventValue.Arg);
 
                     break;
 
@@ -211,7 +201,8 @@ namespace UMP
         private bool IsNativeEvents(object events)
         {
             return events is MediaPlayerStandalone ||
-                events is MediaPlayerWebGL;
+                events is MediaPlayerAndroid ||
+                events is MediaPlayerIPhone;
         }
 
         internal void SetEvent(PlayerState state)
@@ -282,18 +273,9 @@ namespace UMP
                 }
             }
 
-            if (_playerImageReadyListener != null)
-            {
-                foreach (Action<Texture2D> eh in _playerImageReadyListener.GetInvocationList())
-                {
-                    if (!IsNativeEvents(eh.Target))
-                        _playerImageReadyListener -= eh;
-                }
-            }
-
             if (_playerPreparedListener != null)
             {
-                foreach (Action<int, int> eh in _playerPreparedListener.GetInvocationList())
+                foreach (Action<Texture2D> eh in _playerPreparedListener.GetInvocationList())
                 {
                     if (!IsNativeEvents(eh.Target))
                         _playerPreparedListener -= eh;
@@ -389,13 +371,7 @@ namespace UMP
                     PlayerBufferingListener += eh;
             }
 
-            foreach (Action<Texture2D> eh in events._playerImageReadyListener.GetInvocationList())
-            {
-                if (!IsNativeEvents(eh.Target))
-                    PlayerImageReadyListener += eh;
-            }
-
-            foreach (Action<int, int> eh in events._playerPreparedListener.GetInvocationList())
+            foreach (Action<Texture2D> eh in events._playerPreparedListener.GetInvocationList())
             {
                 if (!IsNativeEvents(eh.Target))
                     PlayerPreparedListener += eh;
@@ -481,33 +457,18 @@ namespace UMP
             }
         }
 
-        private event Action<Texture2D> _playerImageReadyListener;
+        private event Action<Texture2D> _playerPreparedListener;
 
-        public event Action<Texture2D> PlayerImageReadyListener
+        public event Action<Texture2D> PlayerPreparedListener
         {
             add
             {
-                _playerImageReadyListener = (Action<Texture2D>)Delegate.Combine(_playerImageReadyListener, value);
-            }
-            remove
-            {
-                if (_playerImageReadyListener != null)
-                    _playerImageReadyListener = (Action<Texture2D>)Delegate.Remove(_playerImageReadyListener, value);
-            }
-        }
-
-        private event Action<int, int> _playerPreparedListener;
-
-        public event Action<int, int> PlayerPreparedListener
-        {
-            add
-            {
-                _playerPreparedListener = (Action<int, int>)Delegate.Combine(_playerPreparedListener, value);
+                _playerPreparedListener = (Action<Texture2D>)Delegate.Combine(_playerPreparedListener, value);
             }
             remove
             {
                 if (_playerPreparedListener != null)
-                    _playerPreparedListener = (Action<int, int>)Delegate.Remove(_playerPreparedListener, value);
+                    _playerPreparedListener = (Action<Texture2D>)Delegate.Remove(_playerPreparedListener, value);
             }
         }
 

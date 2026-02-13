@@ -1,5 +1,5 @@
 #!/bin/sh
  
 cd "$(dirname "$0")"
-sudo apt-get purge libavutil-dev libavcodec-dev libavformat-dev libswscale-dev libxcb-randr0-dev
+sudo apt-get remove libswscale-ffmpeg3 libavcodec-ffmpeg56
 sudo apt-get autoremove

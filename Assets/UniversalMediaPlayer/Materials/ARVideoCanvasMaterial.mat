@@ -63,10 +63,6 @@ Material:
     m_Floats:
     - PixelSnap: 0
     - _AlphaPower: 1
-    - _BorderOffsetBottom: 0.001
-    - _BorderOffsetLeft: 0.001
-    - _BorderOffsetRight: 0.001
-    - _BorderOffsetTop: 0.001
     - _BorderSize: 0
     - _BorderUWidth: 0
     - _BorderVWidth: 0

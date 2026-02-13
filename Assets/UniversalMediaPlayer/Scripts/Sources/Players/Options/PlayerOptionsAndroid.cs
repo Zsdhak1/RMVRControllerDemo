@@ -17,6 +17,7 @@ namespace UMP
         private const string OPENGL_DECODING_KEY = "--vout";
         private const string VIDEO_CHROMA_STATE_KEY = "chroma-state";
         private const string VIDEO_CHROMA_KEY = "--android-display-chroma";
+        //private const string SKIP_FRAME_KEY = "--android-display-chroma";
 
         private const string PLAY_IN_BACKGROUND_KEY = ":play-in-background";
         private const string RTSP_OVER_TCP_KEY = ":rtsp-tcp";
@@ -48,7 +49,6 @@ namespace UMP
 
         public PlayerOptionsAndroid(string[] options) : base(options)
         {
-            PlayerType = PlayerTypes.Exo;
             NetworkCaching = DEFAULT_CACHING_VALUE;
             CrAverage = DEFAULT_CR_AVERAGE_VALUE;
             ClockSynchro = States.Default;
@@ -67,7 +67,7 @@ namespace UMP
             }
             set
             {
-                var settings = UMPSettings.Instance;
+                var settings = UMPSettings.GetSettings();
                 var playerTypes = Enum.GetValues(typeof(PlayerTypes));
                 var result = PlayerTypes.Native;
 
