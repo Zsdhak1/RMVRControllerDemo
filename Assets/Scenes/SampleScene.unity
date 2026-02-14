@@ -24982,20 +24982,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f4a4a862862b87140bfd3d46ace6439f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  modeButtonText: {fileID: 262579803}
-  useDirectWristMapping: 0
-  kpSlider: {fileID: 504632468}
-  kpValueText: {fileID: 2017278064}
-  kdSlider: {fileID: 1222351935}
-  kdValueText: {fileID: 1672867164}
-  usePID: 0
-  globalPID:
-    Kp: 10
-    Kd: 2
-    currentVelocity: 0
-    lastError: 0
-  safeZoneRadius: 0.4
-  maxReachPercentage: 0.98
+  jointSmoothTime: 0.1
+  maxJointSpeed: 720
+  inputSmoothTime: 0.1
+  autoCalibrate: 1
   L1_BigArm: 0.25
   L2_SmallArm: 0.25
   J4_Drop_Offset: 0.1
@@ -25005,8 +24995,20 @@ MonoBehaviour:
   iterationDamping: 0.5
   j1DeadZoneRadius: 0.1
   j1SoftDeadZone: 0.3
-  inputSmoothTime: 0.1
-  manualJ7Speed: 90
+  j7RotationSpeed: 90
+  visual_J1: {fileID: 1171502583}
+  visual_J2: {fileID: 1685133419}
+  visual_J3: {fileID: 1708009794}
+  visual_PlatformBase: {fileID: 616715946}
+  visual_J4: {fileID: 541442820}
+  visual_J5: {fileID: 436478847}
+  visual_J6: {fileID: 1557317141}
+  visual_J7: {fileID: 1574674944}
+  ref_J3_Pivot: {fileID: 1708009794}
+  ref_J4_Pivot: {fileID: 1909050018}
+  gripOffset: {x: 0, y: 0, z: 0}
+  invert_J2: 0
+  invert_J3: 1
   jointLimits:
   - name: Joint
     minAngle: -170
@@ -25038,20 +25040,6 @@ MonoBehaviour:
     meshRenderer: {fileID: 2125451294}
   normalColor: {r: 1, g: 1, b: 1, a: 1}
   warningColor: {r: 1, g: 0, b: 1, a: 1}
-  visual_J1: {fileID: 1171502583}
-  visual_J2: {fileID: 1685133419}
-  visual_J3: {fileID: 1708009794}
-  visual_PlatformBase: {fileID: 616715946}
-  visual_J4: {fileID: 541442820}
-  visual_J5: {fileID: 436478847}
-  visual_J6: {fileID: 1557317141}
-  visual_J7: {fileID: 1574674944}
-  autoCalibrate: 1
-  ref_J3_Pivot: {fileID: 1909050018}
-  ref_J4_Pivot: {fileID: 616715946}
-  gripOffset: {x: 0, y: 0, z: 0}
-  invert_J2: 0
-  invert_J3: 1
   outAngles:
   - 0
   - 0
