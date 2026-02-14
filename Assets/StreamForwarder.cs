@@ -5,51 +5,73 @@ using System.Threading;
 using UnityEngine;
 using System.Collections.Concurrent;
 
+/// <summary>
+/// 功能：将 UDP 3334 端口的数据 剥离前8字节头后 转发至 TCP 3335 端口
+/// 特点：完全独立运行，无外部依赖
+/// </summary>
 public class StreamForwarder : MonoBehaviour
 {
-    private const int SourcePort = 3334; // UDP 入口
-    private const int TargetPort = 3335; // TCP 出口
+    [Header("Network Settings")]
+    public int sourcePort = 3334; // UDP 输入
+    public int targetPort = 3335; // TCP 输出
+    public string listenAddress = "127.0.0.1";
+
+    [Header("Debug Info")]
+    [SerializeField] private bool showBitrate = true;
 
     private Socket _udpSocket;
     private TcpListener _tcpListener;
     private Thread _forwardThread;
-    private volatile bool _isRunning = false; 
-
-    public LogModuleManager logModule;
+    private volatile bool _isRunning = false;
 
     // 64KB 缓冲区
-    private byte[] _buffer = new byte[65536]; 
+    private readonly byte[] _buffer = new byte[65536];
+
+    void Start()
+    {
+        StartForwarding();
+    }
 
     public void StartForwarding()
     {
         if (_isRunning) return;
         _isRunning = true;
 
-        _forwardThread = new Thread(ForwardLoop);
-        _forwardThread.IsBackground = true;
-        _forwardThread.Priority = System.Threading.ThreadPriority.AboveNormal;
+        _forwardThread = new Thread(ForwardLoop)
+        {
+            IsBackground = true,
+            Priority = System.Threading.ThreadPriority.AboveNormal,
+            Name = "StreamForwarderThread"
+        };
         _forwardThread.Start();
 
-        LogToUI($"<color=green>Service Started: UDP {SourcePort} -> TCP {TargetPort}</color>");
+        LogToUI($"<color=green>Service Started: UDP {sourcePort} -> TCP {targetPort}</color>");
     }
 
     public void StopForwarding()
     {
         _isRunning = false;
-        // 强制关闭 Socket
-        if (_udpSocket != null) { try { _udpSocket.Close(); } catch { } }
-        if (_tcpListener != null) { try { _tcpListener.Stop(); } catch { } }
-        if (_forwardThread != null && _forwardThread.IsAlive) _forwardThread.Abort();
+
+        if (_udpSocket != null) { try { _udpSocket.Close(); } catch { } _udpSocket = null; }
+        if (_tcpListener != null) { try { _tcpListener.Stop(); } catch { } _tcpListener = null; }
+        
+        if (_forwardThread != null && _forwardThread.IsAlive)
+        {
+            // 给线程一点时间自行退出，如果不成则强行中断
+            if (!_forwardThread.Join(500)) _forwardThread.Abort();
+            _forwardThread = null;
+        }
+        LogToUI("<color=yellow>Service Stopped.</color>");
     }
 
     private void ForwardLoop()
     {
-        // 1. 初始化 UDP (使用底层 Socket)
-        _udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        // 1. 初始化 UDP
         try
         {
-            _udpSocket.Bind(new IPEndPoint(IPAddress.Any, SourcePort));
-            _udpSocket.ReceiveBufferSize = 1024 * 1024 * 2; // 2MB UDP Buffer
+            _udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            _udpSocket.Bind(new IPEndPoint(IPAddress.Any, sourcePort));
+            _udpSocket.ReceiveBufferSize = 1024 * 1024 * 2; // 2MB 接收缓冲
         }
         catch (Exception e)
         {
@@ -58,9 +80,9 @@ public class StreamForwarder : MonoBehaviour
         }
 
         // 2. 初始化 TCP
-        try 
+        try
         {
-            _tcpListener = new TcpListener(IPAddress.Parse("127.0.0.1"), TargetPort);
+            _tcpListener = new TcpListener(IPAddress.Parse(listenAddress), targetPort);
             _tcpListener.Start();
         }
         catch (Exception e)
@@ -69,9 +91,8 @@ public class StreamForwarder : MonoBehaviour
             return;
         }
 
-        LogToUI("Waiting for Client (VLC/UMP)...");
+        LogToUI($"<color=white>Waiting for Connection (e.g. VLC open tcp://{listenAddress}:{targetPort})...</color>");
 
-        // --- 外层循环：重连机制 ---
         while (_isRunning)
         {
             TcpClient client = null;
@@ -79,43 +100,53 @@ public class StreamForwarder : MonoBehaviour
 
             try
             {
-                // 阻塞等待连接
+                // 等待 TCP 连接
+                if (!_tcpListener.Pending())
+                {
+                    Thread.Sleep(100); // 避免 CPU 空转
+                    continue;
+                }
+
                 client = _tcpListener.AcceptTcpClient();
-                client.NoDelay = true; 
-                client.SendBufferSize = 1024 * 1024; 
+                client.NoDelay = true;
+                client.SendBufferSize = 1024 * 1024;
                 stream = client.GetStream();
 
-                LogToUI("<color=cyan>Client Connected! Streaming...</color>");
+                LogToUI("<color=cyan>Client Connected! Forwarding data...</color>");
 
                 long bytesInSecond = 0;
                 DateTime lastLogTime = DateTime.Now;
                 EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
 
-                // --- 内层循环：转发数据 ---
                 while (_isRunning && client.Connected)
                 {
-                    // 接收 UDP
-                    int recvLen = _udpSocket.ReceiveFrom(_buffer, ref remoteEP);
-
-                    if (recvLen > 8)
+                    if (_udpSocket.Available > 0)
                     {
-                        try 
+                        int recvLen = _udpSocket.ReceiveFrom(_buffer, ref remoteEP);
+
+                        // 关键逻辑：剥离前8个字节（通常是某些协议的私有头）
+                        if (recvLen > 8)
                         {
-                            // 切掉前8字节，写入 TCP
-                            stream.Write(_buffer, 8, recvLen - 8);
-                            bytesInSecond += (recvLen - 8);
-                        }
-                        catch
-                        {
-                            LogToUI("<color=orange>Client Disconnected.</color>");
-                            break; 
+                            try
+                            {
+                                stream.Write(_buffer, 8, recvLen - 8);
+                                bytesInSecond += (recvLen - 8);
+                            }
+                            catch
+                            {
+                                break; // 写入失败，断开 TCP
+                            }
                         }
                     }
-
-                    // 每秒更新一次 UI
-                    if ((DateTime.Now - lastLogTime).TotalSeconds >= 1.0)
+                    else
                     {
-                        double kbps = (bytesInSecond * 8) / 1000.0; 
+                        Thread.Sleep(1); // 降低 CPU 占用
+                    }
+
+                    // 统计比特率
+                    if (showBitrate && (DateTime.Now - lastLogTime).TotalSeconds >= 1.0)
+                    {
+                        double kbps = (bytesInSecond * 8) / 1000.0;
                         LogToUI($"Bitrate: {kbps:F0} kbps");
                         bytesInSecond = 0;
                         lastLogTime = DateTime.Now;
@@ -124,21 +155,22 @@ public class StreamForwarder : MonoBehaviour
             }
             catch (Exception e)
             {
-                if (_isRunning) LogToUI($"Error: {e.Message}");
+                if (_isRunning) LogToUI($"Loop Error: {e.Message}");
             }
             finally
             {
-                if (stream != null) stream.Close();
-                if (client != null) client.Close();
+                stream?.Close();
+                client?.Close();
+                if (_isRunning) LogToUI("<color=orange>Client Disconnected.</color>");
             }
         }
     }
 
     private void LogToUI(string msg)
     {
-        // 调用下面的辅助类
+        // 现在直接打印到 Unity 控制台，不再依赖 LogModuleManager
         UnityMainThreadDispatcher.Instance().Enqueue(() => {
-            if (logModule != null) logModule.AddLog(msg);
+            Debug.Log($"[StreamForwarder] {msg}");
         });
     }
 
@@ -146,12 +178,16 @@ public class StreamForwarder : MonoBehaviour
     {
         StopForwarding();
     }
+
+    void OnApplicationQuit()
+    {
+        StopForwarding();
+    }
 }
 
-// ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
-// ！！！ 这一段就是你之前报错缺失的部分 ！！！
-// ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
-
+// ---------------------------------------------------------
+// 内部辅助类：确保在主线程执行代码（如 Debug.Log）
+// ---------------------------------------------------------
 public class UnityMainThreadDispatcher : MonoBehaviour
 {
     private static UnityMainThreadDispatcher _instance;
@@ -161,10 +197,17 @@ public class UnityMainThreadDispatcher : MonoBehaviour
     {
         if (!_instance)
         {
-            // 在场景里创建一个隐藏的物体来承载这个组件
-            GameObject go = new GameObject("UnityMainThreadDispatcher");
-            _instance = go.AddComponent<UnityMainThreadDispatcher>();
-            DontDestroyOnLoad(go);
+            GameObject go = GameObject.Find("UnityMainThreadDispatcher");
+            if (!go)
+            {
+                go = new GameObject("UnityMainThreadDispatcher");
+                _instance = go.AddComponent<UnityMainThreadDispatcher>();
+                DontDestroyOnLoad(go);
+            }
+            else
+            {
+                _instance = go.GetComponent<UnityMainThreadDispatcher>();
+            }
         }
         return _instance;
     }
@@ -173,6 +216,9 @@ public class UnityMainThreadDispatcher : MonoBehaviour
 
     void Update()
     {
-        while (_executionQueue.TryDequeue(out var action)) action.Invoke();
+        while (_executionQueue.TryDequeue(out var action))
+        {
+            action.Invoke();
+        }
     }
 }
