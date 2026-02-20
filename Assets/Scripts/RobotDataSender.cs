@@ -56,19 +56,21 @@ public class RobotDataSender : MonoBehaviour
         }
         dataPacket[15] = sum;
 
-        // === 步骤 D: 组装 Protobuf 消息 ===
-        RoboMaster.RemoteControl controlMsg = new RoboMaster.RemoteControl();
+        // ... (前面代码不变)
+
+        // === 步骤 D: 组装 Protobuf 消息 (V1.2.0) ===
+        // 使用 CustomControl 替代 RemoteControl
+        RoboMaster.CustomControl controlMsg = new RoboMaster.CustomControl();
         
-        // 填入核心数据
+        // 填入核心数据 (最大 30 字节)
         controlMsg.Data = ByteString.CopyFrom(dataPacket);
         
-        // 填入额外按钮 (例如 A 键用于特殊功能，如切换模式)
-        controlMsg.RightButtonDown = OVRInput.Get(OVRInput.Button.One, OVRInput.Controller.RTouch);
-        
-        // 可选：填入鼠标/键盘模拟数据 (如果需要)
-        // controlMsg.MouseX = ...
+        // 注意：CustomControl 只有 Data 字段。
+        // 如果你需要发送 RightButtonDown，必须把它塞进 dataPacket 的某个字节里(比如第16个字节)
+        // 例如: dataPacket[16] = OVRInput.Get(OVRInput.Button.One) ? (byte)1 : (byte)0;
 
         // === 步骤 E: 通过 DataManager 发送 ===
-        DataManager.Instance.SendRemoteControl(controlMsg);
+        // 调用新的发送方法
+        DataManager.Instance.SendCustomControl(controlMsg);
     }
 }
