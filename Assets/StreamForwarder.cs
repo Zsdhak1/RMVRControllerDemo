@@ -2,30 +2,33 @@ using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using UnityEngine;
 using System.Collections.Concurrent;
+using UnityEngine;
 
-/// <summary>
-/// 功能：将 UDP 3334 端口的数据 剥离前8字节头后 转发至 TCP 3335 端口
-/// 特点：完全独立运行，无外部依赖
-/// </summary>
 public class StreamForwarder : MonoBehaviour
 {
     [Header("Network Settings")]
-    public int sourcePort = 3334; // UDP 输入
-    public int targetPort = 3335; // TCP 输出
-    public string listenAddress = "127.0.0.1";
+    public int sourcePort = 3334;
+    public int targetPort = 3335;
+    
+    // Unity内部视频插件去连本机
+    public string listenAddress = "0.0.0.0"; 
 
-    [Header("Debug Info")]
-    [SerializeField] private bool showBitrate = true;
-
-    private Socket _udpSocket;
+    private UdpClient _udpClient;
     private TcpListener _tcpListener;
-    private Thread _forwardThread;
-    private volatile bool _isRunning = false;
+    private TcpClient _currentTcpClient;
+    private NetworkStream _tcpStream;
+    private Thread _tcpThread;
 
-    // 64KB 缓冲区
-    private readonly byte[] _buffer = new byte[65536];
+    public volatile bool isRunning = false;
+    
+    // 监控大盘数据
+    public long probeTotalBytesReceived = 0;
+    public int probeTotalPacketsReceived = 0;
+    public int currentRateKbps = 0;
+
+    private long bytesInSecond = 0;
+    private float lastLogTime;
 
     void Start()
     {
@@ -34,160 +37,178 @@ public class StreamForwarder : MonoBehaviour
 
     public void StartForwarding()
     {
-        if (_isRunning) return;
-        _isRunning = true;
+        if (isRunning) return;
+        isRunning = true;
+        lastLogTime = Time.time;
 
-        _forwardThread = new Thread(ForwardLoop)
-        {
-            IsBackground = true,
-            Priority = System.Threading.ThreadPriority.AboveNormal,
-            Name = "StreamForwarderThread"
-        };
-        _forwardThread.Start();
-
-        LogToUI($"<color=green>Service Started: UDP {sourcePort} -> TCP {targetPort}</color>");
-    }
-
-    public void StopForwarding()
-    {
-        _isRunning = false;
-
-        if (_udpSocket != null) { try { _udpSocket.Close(); } catch { } _udpSocket = null; }
-        if (_tcpListener != null) { try { _tcpListener.Stop(); } catch { } _tcpListener = null; }
-        
-        if (_forwardThread != null && _forwardThread.IsAlive)
-        {
-            // 给线程一点时间自行退出，如果不成则强行中断
-            if (!_forwardThread.Join(500)) _forwardThread.Abort();
-            _forwardThread = null;
-        }
-        LogToUI("<color=yellow>Service Stopped.</color>");
-    }
-
-    private void ForwardLoop()
-    {
-        // 1. 初始化 UDP
+        // 1. 开启 UDP 异步接水管 (Android 防假死核心)
         try
         {
-            _udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            _udpSocket.Bind(new IPEndPoint(IPAddress.Any, sourcePort));
-            _udpSocket.ReceiveBufferSize = 1024 * 1024 * 2; // 2MB 接收缓冲
+            _udpClient = new UdpClient();
+            _udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, sourcePort));
+            _udpClient.Client.ReceiveBufferSize = 1024 * 1024 * 4; 
+
+            _udpClient.BeginReceive(new AsyncCallback(UdpReceiveCallback), null);
+            Debug.Log($"[图传内核] UDP {sourcePort} 接水管成功");
         }
         catch (Exception e)
         {
-            LogToUI($"<color=red>UDP Bind Error: {e.Message}</color>");
-            return;
+            Debug.LogError($"[图传内核] UDP 启动失败: {e.Message}");
         }
 
-        // 2. 初始化 TCP
+        // 2. 开启 TCP 服务器，等待 Unity 自带播放器来连
         try
         {
-            _tcpListener = new TcpListener(IPAddress.Parse(listenAddress), targetPort);
+            IPAddress ip = (listenAddress == "0.0.0.0" || listenAddress.ToLower() == "any") ? IPAddress.Any : IPAddress.Parse(listenAddress);
+            _tcpListener = new TcpListener(ip, targetPort);
             _tcpListener.Start();
+            
+            // 开一个专门处理 TCP 生命周期的后台线程，防止阻碍 Unity 主线程
+            _tcpThread = new Thread(TcpAcceptLoop) { IsBackground = true };
+            _tcpThread.Start();
+            
+            Debug.Log($"[图传内核] TCP {targetPort} 本地源已开启，等待内部播放器连接...");
         }
         catch (Exception e)
         {
-            LogToUI($"<color=red>TCP Start Error: {e.Message}</color>");
-            return;
+            Debug.LogError($"[图传内核] TCP 启动失败: {e.Message}");
         }
+    }
 
-        LogToUI($"<color=white>Waiting for Connection (e.g. VLC open tcp://{listenAddress}:{targetPort})...</color>");
+    // ====== UDP 异步高频接收与推流 ======
+    private void UdpReceiveCallback(IAsyncResult res)
+    {
+        if (!isRunning || _udpClient == null) return;
 
-        while (_isRunning)
+        try
         {
-            TcpClient client = null;
-            NetworkStream stream = null;
+            IPEndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+            byte[] data = _udpClient.EndReceive(res, ref remoteEP);
 
+            if (data != null && data.Length > 8)
+            {
+                probeTotalBytesReceived += data.Length;
+                probeTotalPacketsReceived++;
+                
+                // 去除 RMUC 的 8 字节包头，获取纯净 H265
+                int payloadLength = data.Length - 8;
+                bytesInSecond += payloadLength;
+
+                // 若 Unity 内有播放器连接了，火速把纯净帧推给他
+                if (_tcpStream != null)
+                {
+                    try
+                    {
+                        // 强制写流，如果对方断开了这里会抛出异常
+                        _tcpStream.Write(data, 8, payloadLength);
+                    }
+                    catch
+                    {
+                        // 发现播放器端断开了，立刻斩断流引用
+                        CloseCurrentTcpClient();
+                    }
+                }
+            }
+
+            // 立刻开始接下一滴水
+            if (isRunning)
+            {
+                _udpClient.BeginReceive(new AsyncCallback(UdpReceiveCallback), null);
+            }
+        }
+        catch (ObjectDisposedException) 
+        { }
+        catch (Exception ex)
+        {
+            if (isRunning) Debug.LogWarning($"[图传内核] UDP 错误: {ex.Message}");
+        }
+    }
+
+    // ====== TCP 连接生命周期控制与清理 ======
+    private void TcpAcceptLoop()
+    {
+        while (isRunning)
+        {
             try
             {
-                // 等待 TCP 连接
                 if (!_tcpListener.Pending())
                 {
-                    Thread.Sleep(100); // 避免 CPU 空转
+                    Thread.Sleep(50);
                     continue;
                 }
 
-                client = _tcpListener.AcceptTcpClient();
-                client.NoDelay = true;
-                client.SendBufferSize = 1024 * 1024;
-                stream = client.GetStream();
+                // 一旦来老客户，先清退上一个
+                CloseCurrentTcpClient();
 
-                LogToUI("<color=cyan>Client Connected! Forwarding data...</color>");
+                _currentTcpClient = _tcpListener.AcceptTcpClient();
+                // 配置 0 延迟推送参数
+                _currentTcpClient.NoDelay = true;
+                _currentTcpClient.SendBufferSize = 1024 * 1024 * 2;
+                _tcpStream = _currentTcpClient.GetStream();
 
-                long bytesInSecond = 0;
-                DateTime lastLogTime = DateTime.Now;
-                EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
-
-                while (_isRunning && client.Connected)
+                UnityMainThreadDispatcher.Instance().Enqueue(() => {
+                    Debug.Log("<color=cyan>[图传内核] Unity 内部播放器连接成功！引擎点火！</color>");
+                });
+                
+                // 死循环探活，一旦发现 TCP Client 死亡，强制关闭并回到最上层等待
+                while (isRunning && _currentTcpClient.Connected)
                 {
-                    if (_udpSocket.Available > 0)
+                    if (_currentTcpClient.Client.Poll(0, SelectMode.SelectRead))
                     {
-                        int recvLen = _udpSocket.ReceiveFrom(_buffer, ref remoteEP);
-
-                        // 关键逻辑：剥离前8个字节（通常是某些协议的私有头）
-                        if (recvLen > 8)
-                        {
-                            try
-                            {
-                                stream.Write(_buffer, 8, recvLen - 8);
-                                bytesInSecond += (recvLen - 8);
-                            }
-                            catch
-                            {
-                                break; // 写入失败，断开 TCP
-                            }
-                        }
+                        byte[] checkBuf = new byte[1];
+                        if (_currentTcpClient.Client.Receive(checkBuf, SocketFlags.Peek) == 0)
+                            break; 
                     }
-                    else
-                    {
-                        Thread.Sleep(1); // 降低 CPU 占用
-                    }
-
-                    // 统计比特率
-                    if (showBitrate && (DateTime.Now - lastLogTime).TotalSeconds >= 1.0)
-                    {
-                        double kbps = (bytesInSecond * 8) / 1000.0;
-                        LogToUI($"Bitrate: {kbps:F0} kbps");
-                        bytesInSecond = 0;
-                        lastLogTime = DateTime.Now;
-                    }
+                    Thread.Sleep(100);
                 }
+                
+                CloseCurrentTcpClient();
             }
-            catch (Exception e)
-            {
-                if (_isRunning) LogToUI($"Loop Error: {e.Message}");
-            }
-            finally
-            {
-                stream?.Close();
-                client?.Close();
-                if (_isRunning) LogToUI("<color=orange>Client Disconnected.</color>");
-            }
+            catch { }
         }
     }
 
-    private void LogToUI(string msg)
+    private void CloseCurrentTcpClient()
     {
-        // 现在直接打印到 Unity 控制台，不再依赖 LogModuleManager
-        UnityMainThreadDispatcher.Instance().Enqueue(() => {
-            Debug.Log($"[StreamForwarder] {msg}");
-        });
+        if (_tcpStream != null) { try { _tcpStream.Close(); } catch { } _tcpStream = null; }
+        if (_currentTcpClient != null) { try { _currentTcpClient.Close(); } catch { } _currentTcpClient = null; }
     }
 
-    void OnDestroy()
+    // ====== 提供主界面速率日志 ======
+    void Update()
     {
-        StopForwarding();
+        if (!isRunning) return;
+
+        if (Time.time - lastLogTime >= 1.0f)
+        {
+            currentRateKbps = (int)((bytesInSecond * 8) / 1000);
+            
+            if (currentRateKbps > 0)
+            {
+                UnityMainThreadDispatcher.Instance().Enqueue(() => {
+                     Debug.Log($"[StreamForwarder] Bitrate: {currentRateKbps} kbps");
+                });
+            }
+
+            bytesInSecond = 0;
+            lastLogTime = Time.time;
+        }
     }
 
-    void OnApplicationQuit()
+    void OnDestroy() => StopForwarding();
+    void OnApplicationQuit() => StopForwarding();
+
+    public void StopForwarding()
     {
-        StopForwarding();
+        isRunning = false;
+        if (_udpClient != null) { try { _udpClient.Close(); } catch { } _udpClient = null; }
+        CloseCurrentTcpClient();
+        if (_tcpListener != null) { try { _tcpListener.Stop(); } catch { } _tcpListener = null; }
     }
 }
 
-// ---------------------------------------------------------
-// 内部辅助类：确保在主线程执行代码（如 Debug.Log）
-// ---------------------------------------------------------
+// 内部单例列队保护，保持原样
 public class UnityMainThreadDispatcher : MonoBehaviour
 {
     private static UnityMainThreadDispatcher _instance;
@@ -204,21 +225,11 @@ public class UnityMainThreadDispatcher : MonoBehaviour
                 _instance = go.AddComponent<UnityMainThreadDispatcher>();
                 DontDestroyOnLoad(go);
             }
-            else
-            {
-                _instance = go.GetComponent<UnityMainThreadDispatcher>();
-            }
+            else { _instance = go.GetComponent<UnityMainThreadDispatcher>(); }
         }
         return _instance;
     }
 
     public void Enqueue(Action action) => _executionQueue.Enqueue(action);
-
-    void Update()
-    {
-        while (_executionQueue.TryDequeue(out var action))
-        {
-            action.Invoke();
-        }
-    }
+    void Update() { while (_executionQueue.TryDequeue(out var action)) { action.Invoke(); } }
 }

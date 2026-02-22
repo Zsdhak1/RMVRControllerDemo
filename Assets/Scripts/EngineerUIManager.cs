@@ -19,6 +19,16 @@ public class EngineerUIManager : MonoBehaviour
     public Slider myOutpostSlider;
     public Slider enemyBaseSlider; 
     public Slider enemyOutpostSlider; 
+    [Header("=== 阵营颜色设定 ===")]
+    public Color redTeamColor = new Color(0.9f, 0.2f, 0.2f, 1f);  // 红色
+    public Color blueTeamColor = new Color(0.2f, 0.5f, 0.9f, 1f); // 蓝色
+
+    [Header("=== 血条背景填充 (Fill) ===")]
+    // 这里的 Image 是为了改颜色，不是调进度。请把 Slider 的 Fill 子物体拖给它。
+    public Image myBaseFill;
+    public Image myOutpostFill;
+    public Image enemyBaseFill;
+    public Image enemyOutpostFill;
 
     [Header("=== 自身状态 (Self Status) ===")]
     public Slider hpSlider;           
@@ -50,6 +60,9 @@ public class EngineerUIManager : MonoBehaviour
     public GameObject notificationPrefab;  
     public Transform notificationContainer;
 
+    [Header("=== 重连控制 ===")]
+    public Button btnReconnect;
+
     // 内部状态
     private int lastHp;
     private uint selectedDifficulty = 0;
@@ -73,6 +86,14 @@ public class EngineerUIManager : MonoBehaviour
 
         if(assemblyPanel) assemblyPanel.SetActive(false);
         if(damageFlash) damageFlash.alpha = 0;
+        if(btnReconnect != null) 
+        {
+            btnReconnect.onClick.AddListener(() => 
+            {
+                if(DataManager.Instance != null)
+                    DataManager.Instance.ReconnectToServer();
+            });
+        }
     }
 
     void Update()
@@ -102,10 +123,28 @@ public class EngineerUIManager : MonoBehaviour
     // 2. 更新建筑血量
     void UpdateBuildings()
     {
-        UpdateSlider(myBaseSlider, data.BaseHP, 5000);
-        UpdateSlider(myOutpostSlider, data.OutpostHP, 1500);
-        UpdateSlider(enemyBaseSlider, data.EnemyBaseHP, 5000);
-        UpdateSlider(enemyOutpostSlider, data.EnemyOutpostHP, 1500);
+            // === 核心：红蓝阵营自动判定逻辑 ===
+        // 在通信协议 V1.2.0 中，红方机器人 ID 为 1~11，蓝方为 101~111
+        bool isRedTeam = (data.MyID < 100);
+        // 赋值给己方与敌方的颜色
+        Color myColor = isRedTeam ? redTeamColor : blueTeamColor;
+        Color enemyColor = isRedTeam ? blueTeamColor : redTeamColor;
+        // === 执行 1：更新进度条长度 ===
+        // 假设你的基地血条 Slider 最大都是设置的 1，走比例填充机制 (Fill Amount)
+        if (myBaseSlider != null) 
+            myBaseSlider.value = (float)data.BaseHP / 5000f;
+        if (myOutpostSlider != null) 
+            myOutpostSlider.value = (float)data.OutpostHP / 1500f;
+        
+        if (enemyBaseSlider != null) 
+            enemyBaseSlider.value = (float)data.EnemyBaseHP / 5000f;
+        if (enemyOutpostSlider != null) 
+            enemyOutpostSlider.value = (float)data.EnemyOutpostHP / 1500f;
+        // === 执行 2：渲染红蓝颜色阵营 ===
+        if (myBaseFill != null) myBaseFill.color = myColor;
+        if (myOutpostFill != null) myOutpostFill.color = myColor;
+        if (enemyBaseFill != null) enemyBaseFill.color = enemyColor;
+        if (enemyOutpostFill != null) enemyOutpostFill.color = enemyColor;
     }
 
     void UpdateSlider(Slider s, float val, float max)

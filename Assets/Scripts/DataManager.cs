@@ -211,7 +211,56 @@ public class DataManager : MonoBehaviour
         };
         foreach (var t in topics) await mqttClient.SubscribeAsync(new MqttTopicFilterBuilder().WithTopic(t).Build());
     }
+    /// <summary>
+    /// 连接状态监控
+    /// </summary>
+public bool IsMqttConnected => mqttClient != null && mqttClient.IsConnected;
 
+/// <summary>
+/// 解决问题6: 强制清除旧网络残留并重新连接裁判系统
+/// </summary>
+public async void ReconnectToServer()
+{
+    Debug.Log("[DataManager] 执行手动强制重连流程...");
+    
+    // 如果存在旧连接，干净地断开并销毁
+    if (mqttClient != null)
+    {
+        if (mqttClient.IsConnected)
+        {
+            try
+            {
+                // 【修复1】使用 MqttClientDisconnectOptionsReason 替代之前的枚举
+                var disconnectOptions = new MqttClientDisconnectOptionsBuilder()
+                    .WithReason(MqttClientDisconnectOptionsReason.NormalDisconnection)
+                    .Build();
+                
+                await mqttClient.DisconnectAsync(disconnectOptions);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[DataManager] 旧连接销毁异常: {ex.Message}");
+            }
+        }
+        mqttClient.Dispose();
+        mqttClient = null;
+    }
+
+    // 重置重要比赛信息（防止被假数据蒙骗）
+    CurrentStage = 0;
+    MatchTime = 0;
+
+    // 强制调用基于全局配置的新连接
+    GlobalConfig.LoadConfig(); 
+    
+    // 假设你有 ConnectToServer(ip, port) 函数的话，则调用：
+    // ConnectToServer(GlobalConfig.CurrentIP, GlobalConfig.CurrentPort);
+    // 如果你之前的连接逻辑直接写在 ConnectToServer() 中没有参数，就直接调用：
+    ConnectToServer(); 
+}
+
+// （仅做示例参考）在创建连接时的 Random 冲突解决：
+// optionsBuilder.WithClientId($"VR_Engineer_{UnityEngine.Random.Range(1000,9999)}")
     // ================== 解析逻辑 ==================
 
     void ParsePacket(string topic, byte[] data)
@@ -392,6 +441,30 @@ public class DataManager : MonoBehaviour
             .Build();
         
         await mqttClient.PublishAsync(mqttMsg);
+    }
+    // 补充发送接口
+    public async void SendKeyboardMouseControl(KeyboardMouseControl kmc)
+    {
+        if (mqttClient == null || !mqttClient.IsConnected) return;
+
+        try
+        {
+            // 这一步是将对象序列化为二进制 protobuf 流
+            byte[] payload = kmc.ToByteArray();
+
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic("KeyboardMouseControl")  // 这个 Topic 名字千万不能错，由协议规定
+                .WithPayload(payload)
+                // 协议中指明 QoS 最高等于 1。这里我们选 1(AtLeastOnce)
+                .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce)
+                .Build();
+
+            await mqttClient.PublishAsync(message);
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[MQTT] KeyboardMouseControl 发送失败: {ex.Message}");
+        }
     }
 
     private async void OnDestroy()
