@@ -83,7 +83,7 @@ public class SystemMonitorUI : MonoBehaviour
             bool isRun = streamForwarder.isRunning;
 
             string statusColor = isRun ? "green" : "red";
-            sb.AppendLine($"服务内核: <color={statusColor}>{(isRun ? "激活动力" : "离线")}</color>");
+            sb.AppendLine($"服务内核: <color={statusColor}>{(isRun ? "状态" : "离线")}</color>");
             
             // 内部播放器连接状态
             string playerColor = isPlayerConnected ? "cyan" : "grey";
@@ -94,12 +94,12 @@ public class SystemMonitorUI : MonoBehaviour
             sb.AppendLine($"当前总吞吐: <color={netColor}>{mbps:F2} Mbps</color>");
             
             // 数据包验证
-            sb.AppendLine($"已接收物理UDP包: {streamForwarder.probeTotalPacketsReceived}");
+            //sb.AppendLine($"已接收物理UDP包: {streamForwarder.probeTotalPacketsReceived}");
 
-            if (mbps == 0 && isRun)
-            {
-                sb.AppendLine("<color=red>警告: 管道通畅，但源头枯竭！</color>");
-            }
+            //if (mbps == 0 && isRun)
+            //{
+            //    sb.AppendLine("<color=red>警告: 管道通畅，但源头枯竭！</color>");
+            //}
         }
         else
         {

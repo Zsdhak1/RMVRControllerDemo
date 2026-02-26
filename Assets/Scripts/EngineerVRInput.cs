@@ -1,5 +1,30 @@
 using UnityEngine;
-using RoboMaster; // 引用你挂了 Protobuf 的那个命名空间
+using System.Collections.Generic;
+using RoboMaster; // 引用 Protobuf 命名空间
+
+// 定义宏映射的数据结构
+[System.Serializable]
+public class KeyMacroMapping
+{
+    [Header("=== 触发条件 ===")]
+    [Tooltip("要检测的手柄")]
+    public OVRInput.Controller controller;
+    
+    [Tooltip("要检测的物理按键")]
+    public OVRInput.Button triggerButton;
+
+    [Header("=== 触发效果 ===")]
+    [Tooltip("触发时要点亮哪些虚拟键盘掩码？可多选！")]
+    public KeyboardBitMask mappedKeys; 
+
+    [Tooltip("是否在此按键按下的瞬间，弹窗提示？")]
+    public bool showNotification = true;
+    
+    [Tooltip("弹出的提示文字")]
+    public string notificationText = "触发绑定宏";
+
+    [HideInInspector] public bool wasPressedLastFrame; 
+}
 
 public class EngineerVRInput : MonoBehaviour
 {
@@ -17,11 +42,23 @@ public class EngineerVRInput : MonoBehaviour
     private float sendInterval;
     private float sendTimer;
 
+    // 【核心新增】专门用来吸纳外部 UI 传递进来的综合按键事件
+    // VirtualMacroButton.cs 会直接修改这个值
+    public static uint ExternalUIMacroMask = 0;
+
+    [Header("=== 核心映射表：物理按键 -> 键盘掩码 ===")]
+    public List<KeyMacroMapping> customKeyMappings = new List<KeyMacroMapping>();
+
+    [Header("=== 左摇杆默认 WASD 设置 ===")]
+    public bool enableStickToWASD = true;
+    // 调教后的轴向独立死区，适配八向移动
+    public float stickDeadZone = 0.35f;
+
     // 内部状态跟踪
     private bool isDragging = false;
     private Quaternion lastControllerRot;
     
-    // 累加器，用于在每一帧累加鼠标变动量并在发包时清空
+    // 累加器
     private int accumulatedMouseX = 0;
     private int accumulatedMouseY = 0;
 
@@ -34,10 +71,13 @@ public class EngineerVRInput : MonoBehaviour
     {
         HandleMenuToggle();
         
-        // 1. 每帧计算鼠标增量并存入累加器
+        // 1. 计算鼠标位移增量
         CalculateMouseDelta();
 
-        // 2. 达到发送频率，打包组装 WASD 和 Mouse 数据发给 MQTT
+        // 2. 检测物理按键宏并显示提示
+        CheckKeysAndNotify();
+
+        // 3. 达到发送频率，打包所有输入发给 MQTT
         sendTimer += Time.deltaTime;
         if (sendTimer >= sendInterval)
         {
@@ -47,8 +87,7 @@ public class EngineerVRInput : MonoBehaviour
     }
 
     /// <summary>
-    /// 功能 A: 将左手 Grip (抓握) 映射为鼠标位移增量 (Mouse Delta)
-    /// 不再旋转 VR 世界，只生成数据！
+    /// 功能 A: 将左手 Grip (抓握) 映射为鼠标位移增量
     /// </summary>
     void CalculateMouseDelta()
     {
@@ -60,7 +99,6 @@ public class EngineerVRInput : MonoBehaviour
 
             if (!isDragging)
             {
-                // 刚按下：重置零点
                 isDragging = true;
                 lastControllerRot = currentRot;
                 accumulatedMouseX = 0;
@@ -68,119 +106,104 @@ public class EngineerVRInput : MonoBehaviour
             }
             else
             {
-                // 拖拽中：计算两帧之间的局部旋转变化
                 Quaternion deltaRot = currentRot * Quaternion.Inverse(lastControllerRot);
                 
-                // 将四元数分解为欧拉角，处理 0-360 跳变
-                float deltaYaw = NormalizeAngle(deltaRot.eulerAngles.y); // 左右转 -> 对应 Mouse X
-                float deltaPitch = NormalizeAngle(deltaRot.eulerAngles.x); // 上下转 -> 对应 Mouse Y
+                float deltaYaw = NormalizeAngle(deltaRot.eulerAngles.y); 
+                float deltaPitch = NormalizeAngle(deltaRot.eulerAngles.x); 
                 
-                // 将度数转化为 int 型鼠标相对位移，并累加给本次发送循环
                 accumulatedMouseX += Mathf.RoundToInt(deltaYaw * mouseSensitivityX);
                 accumulatedMouseY += Mathf.RoundToInt(deltaPitch * mouseSensitivityY);
 
-                // 更新上一帧坐标
                 lastControllerRot = currentRot;
             }
         }
         else
         {
             isDragging = false;
-            // 没按抓握时，鼠标不产生相对位移
             accumulatedMouseX = 0;
             accumulatedMouseY = 0;
         }
     }
 
     /// <summary>
-    /// 功能 B: 收集并打包所有按键及摇杆数据，触发 DataManager 的 MQTT 发送
+    /// 功能 B: 收集并打包所有按键及摇杆数据
     /// </summary>
     void PackAndSendKeyboardMouseControl()
     {
-        // 这一步安全检查极其重要，否则断网或未连上时会疯狂报空引用
         if (DataManager.Instance == null || !DataManager.Instance.IsMqttConnected) return;
 
-        // 1. 构建键鼠控制指令结构体
         KeyboardMouseControl kmc = new KeyboardMouseControl();
 
-        // 2. 封装鼠标位移与按键 (读取刚才我们的累加器)
-        // 注意：RMUC 协议中说：左转为负，下移为负。你可能需要在此处给 accumulatedMouseY 加一个负号，取决于你的物理体感
         kmc.MouseX = accumulatedMouseX;
-        kmc.MouseY = -accumulatedMouseY; // 视需求反转 Y 轴
-        kmc.MouseZ = 0; // 滚轮目前没用到
-
-        // 读取一下是否有开枪等鼠标按键需求
-        kmc.LeftButtonDown = OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger, OVRInput.Controller.RTouch);
-        kmc.RightButtonDown = false; // 按需绑定
-
-        // 3. 将左手摇杆 (Thumbstick) 映射为 WASD 键盘位掩码
-        kmc.KeyboardValue = CalculateKeyboardMask();
-
-        // 4. 清空当次鼠标累加器（准备收集下一波鼠标微操）
+        kmc.MouseY = -accumulatedMouseY; 
+        kmc.MouseZ = 0; 
         accumulatedMouseX = 0;
         accumulatedMouseY = 0;
 
-        // 5. 将这只饱满的数据包，扔给 MQTT！
-        // 如果 DataManager 暂无此方法，你需要把它加进去
+        kmc.LeftButtonDown = OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger, OVRInput.Controller.RTouch);
+        kmc.RightButtonDown = false; 
+
+        // 3. 汇聚所有来源的键盘掩码 (摇杆 + 物理宏 + UI)
+        kmc.KeyboardValue = GatherAllKeyboardMasks();
+
         DataManager.Instance.SendKeyboardMouseControl(kmc);
     }
 
     /// <summary>
-    /// 功能 C: 将模拟量摇杆转换为协议所要求的严格 WASD 对应 Bit 掩码 (uint32)
-    /// 支持物理摇杆推向全向/八向对角线时的组合键并发（例如 W+A 并发）
+    /// 功能 C: 融合所有输入源的位掩码
     /// </summary>
-    uint CalculateKeyboardMask()
+    uint GatherAllKeyboardMasks()
     {
-        uint mask = 0;
-        
-        // 读取左摇杆 2D 值，范围大致在 (-1, -1) 到 (1, 1) 的单位圆内
-        Vector2 stick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
-        
-        // 设定轴向激活阈值 (Deadzone)
-        // 注意：摇杆推到最对角时，分量约为 0.707，所以阈值不能设成 >0.8 这种荒唐值！
-        // 0.3f - 0.5f 之间能保证完美的容错率和八向触发敏感度
-        float triggerThreshold = 0.35f;
+        uint currentMask = 0;
 
-        // X轴判断：互斥（不能同时按 A 和 D）
-        if (stick.x > triggerThreshold) 
+        // 1. 左摇杆 -> WASD (八向独立判定)
+        if (enableStickToWASD)
         {
-            mask |= (1u << 3); // bit 3 = D (右)
-        }
-        else if (stick.x < -triggerThreshold)
-        {
-            mask |= (1u << 2); // bit 2 = A (左)
+            Vector2 stick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
+            
+            // X轴
+            if (stick.x > stickDeadZone)  currentMask |= (uint)KeyboardBitMask.D_Key;
+            else if (stick.x < -stickDeadZone) currentMask |= (uint)KeyboardBitMask.A_Key;
+
+            // Y轴
+            if (stick.y > stickDeadZone)  currentMask |= (uint)KeyboardBitMask.W_Key;
+            else if (stick.y < -stickDeadZone) currentMask |= (uint)KeyboardBitMask.S_Key;
         }
 
-        // Y轴判断：互斥（不能同时按 W 和 S）
-        if (stick.y > triggerThreshold)
+        // 2. 物理按键宏列表
+        foreach (var mapping in customKeyMappings)
         {
-            mask |= (1u << 0); // bit 0 = W (前)
-        }
-        else if (stick.y < -triggerThreshold)
-        {
-            mask |= (1u << 1); // bit 1 = S (后)
-        }
-
-        // --- 附加功能：Shift 加速与 Ctrl 减速掩码映射 ---
-        // 工程车如果需要切挡位，可以用摇杆按下 (L3) 或手柄其他按键
-        // 假设用左手柄的 X 键 来触发 Shift 加速 (bit 4)
-        if (OVRInput.Get(OVRInput.Button.Three, OVRInput.Controller.LTouch))
-        {
-            mask |= (1u << 4);
-        }
-        
-        // 假设用左手柄的 Y 键 来触发 Ctrl 减速 (bit 5)
-        if (OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch))
-        {
-            mask |= (1u << 5);
+            if (OVRInput.Get(mapping.triggerButton, mapping.controller))
+            {
+                currentMask |= (uint)mapping.mappedKeys;
+            }
         }
 
-        return mask;
+        // 3. 外部 UI 虚拟按钮 (Button Down)
+        currentMask |= ExternalUIMacroMask;
+
+        return currentMask;
     }
 
-    // 辅助菜单调出
+    void CheckKeysAndNotify()
+    {
+        foreach (var mapping in customKeyMappings)
+        {
+            bool isPressed = OVRInput.Get(mapping.triggerButton, mapping.controller);
+            if (isPressed && !mapping.wasPressedLastFrame)
+            {
+                if (mapping.showNotification && uiManager != null)
+                {
+                    uiManager.ShowNotification(mapping.notificationText);
+                }
+            }
+            mapping.wasPressedLastFrame = isPressed;
+        }
+    }
+
     void HandleMenuToggle()
     {
+        // 左手菜单键或 X 键呼出菜单
         if (OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch) || 
             OVRInput.GetDown(OVRInput.Button.Start, OVRInput.Controller.LTouch))
         {
@@ -188,7 +211,6 @@ public class EngineerVRInput : MonoBehaviour
         }
     }
 
-    // 将 0~360 的角度转化为正负 -180~180 的偏差度数，这是计算 delta 的基础
     float NormalizeAngle(float a)
     {
         if (a > 180f) return a - 360f;

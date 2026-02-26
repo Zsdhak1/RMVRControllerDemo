@@ -2,8 +2,18 @@ using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using UnityEngine;
+
+// 帧重组缓冲区结构
+class FrameReassemblyBuffer
+{
+    public int totalExpectedBytes;
+    public int currentReceivedBytes;
+    public byte[] completeData;     // 预分配好的完整帧内存
+    public float createTime;
+}
 
 public class StreamForwarder : MonoBehaviour
 {
@@ -11,7 +21,10 @@ public class StreamForwarder : MonoBehaviour
     public int sourcePort = 3334;
     public int targetPort = 3335;
     
-    // Unity内部视频插件去连本机
+    // 【核心参数】最大允许缓冲多少帧（抗抖动能力）
+    // 在弱网下，我们宁愿直接丢弃旧帧也不要花屏，所以保留 3-5 帧缓冲区即可
+    [Range(1, 10)] public int maxReorderFrames = 5;
+
     public string listenAddress = "0.0.0.0"; 
 
     private UdpClient _udpClient;
@@ -22,16 +35,24 @@ public class StreamForwarder : MonoBehaviour
 
     public volatile bool isRunning = false;
     
-    // 监控大盘数据
+    // 监控数据
     public long probeTotalBytesReceived = 0;
     public int probeTotalPacketsReceived = 0;
     public int currentRateKbps = 0;
+    public int droppedFramesCount = 0; // 丢帧统计
 
     private long bytesInSecond = 0;
     private float lastLogTime;
 
+    // --- 弱网对抗核心数据结构 ---
+    // Key: FrameID (ushort), Value: Buffer
+    private Dictionary<ushort, FrameReassemblyBuffer> _jitterBuffer;
+    private ushort _latestFrameId = 0; // 记录收到的最新一帧的 ID
+    private object _bufferLock = new object();
+
     void Start()
     {
+        _jitterBuffer = new Dictionary<ushort, FrameReassemblyBuffer>();
         StartForwarding();
     }
 
@@ -41,34 +62,31 @@ public class StreamForwarder : MonoBehaviour
         isRunning = true;
         lastLogTime = Time.time;
 
-        // 1. 开启 UDP 异步接水管 (Android 防假死核心)
         try
         {
+            // UDP 接收端初始化
             _udpClient = new UdpClient();
             _udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, sourcePort));
-            _udpClient.Client.ReceiveBufferSize = 1024 * 1024 * 4; 
+            _udpClient.Client.ReceiveBufferSize = 1024 * 1024 * 8; // 8MB 超大内核缓冲
 
             _udpClient.BeginReceive(new AsyncCallback(UdpReceiveCallback), null);
-            Debug.Log($"[图传内核] UDP {sourcePort} 接水管成功");
+            Debug.Log($"[图传内核] UDP {sourcePort} 抗弱网模式启动");
         }
         catch (Exception e)
         {
             Debug.LogError($"[图传内核] UDP 启动失败: {e.Message}");
         }
 
-        // 2. 开启 TCP 服务器，等待 Unity 自带播放器来连
+        // TCP 发送端（给 VLC）
         try
         {
             IPAddress ip = (listenAddress == "0.0.0.0" || listenAddress.ToLower() == "any") ? IPAddress.Any : IPAddress.Parse(listenAddress);
             _tcpListener = new TcpListener(ip, targetPort);
             _tcpListener.Start();
             
-            // 开一个专门处理 TCP 生命周期的后台线程，防止阻碍 Unity 主线程
             _tcpThread = new Thread(TcpAcceptLoop) { IsBackground = true };
             _tcpThread.Start();
-            
-            Debug.Log($"[图传内核] TCP {targetPort} 本地源已开启，等待内部播放器连接...");
         }
         catch (Exception e)
         {
@@ -76,7 +94,6 @@ public class StreamForwarder : MonoBehaviour
         }
     }
 
-    // ====== UDP 异步高频接收与推流 ======
     private void UdpReceiveCallback(IAsyncResult res)
     {
         if (!isRunning || _udpClient == null) return;
@@ -84,48 +101,122 @@ public class StreamForwarder : MonoBehaviour
         try
         {
             IPEndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
-            byte[] data = _udpClient.EndReceive(res, ref remoteEP);
+            byte[] packetData = _udpClient.EndReceive(res, ref remoteEP);
 
-            if (data != null && data.Length > 8)
+            if (packetData != null && packetData.Length > 8)
             {
-                probeTotalBytesReceived += data.Length;
-                probeTotalPacketsReceived++;
-                
-                // 去除 RMUC 的 8 字节包头，获取纯净 H265
-                int payloadLength = data.Length - 8;
-                bytesInSecond += payloadLength;
-
-                // 若 Unity 内有播放器连接了，火速把纯净帧推给他
-                if (_tcpStream != null)
-                {
-                    try
-                    {
-                        // 强制写流，如果对方断开了这里会抛出异常
-                        _tcpStream.Write(data, 8, payloadLength);
-                    }
-                    catch
-                    {
-                        // 发现播放器端断开了，立刻斩断流引用
-                        CloseCurrentTcpClient();
-                    }
-                }
+                ProcessPacket(packetData);
             }
 
-            // 立刻开始接下一滴水
             if (isRunning)
             {
                 _udpClient.BeginReceive(new AsyncCallback(UdpReceiveCallback), null);
             }
         }
-        catch (ObjectDisposedException) 
-        { }
+        catch (ObjectDisposedException) { }
         catch (Exception ex)
         {
-            if (isRunning) Debug.LogWarning($"[图传内核] UDP 错误: {ex.Message}");
+            if (isRunning) Debug.LogWarning($"[UDP] {ex.Message}");
         }
     }
 
-    // ====== TCP 连接生命周期控制与清理 ======
+    // --- 核心：分片重组逻辑 ---
+    private void ProcessPacket(byte[] data)
+    {
+        // 1. 解析 RMUC 协议头 (Big Endian)
+        ushort frameId = (ushort)((data[0] << 8) | data[1]);
+        ushort packetIdx = (ushort)((data[2] << 8) | data[3]);
+        int totalFrameSize = (int)((data[4] << 24) | (data[5] << 16) | (data[6] << 8) | data[7]);
+
+        int payloadLen = data.Length - 8;
+
+        lock (_bufferLock)
+        {
+            // A. 脏帧清洗：如果是很老的 ID，直接丢弃
+            int diff = frameId - _latestFrameId;
+            if (diff < -30000) diff += 65536; 
+            
+            if (diff < -maxReorderFrames) return; 
+
+            // 更新最新帧 ID
+            if (diff > 0)
+            {
+                _latestFrameId = frameId;
+                CleanupOldBuffers(_latestFrameId);
+            }
+
+            // B. 获取或创建缓冲区
+            if (!_jitterBuffer.TryGetValue(frameId, out FrameReassemblyBuffer buffer))
+            {
+                buffer = new FrameReassemblyBuffer
+                {
+                    totalExpectedBytes = totalFrameSize,
+                    currentReceivedBytes = 0,
+                    completeData = new byte[totalFrameSize],
+                    createTime = Time.realtimeSinceStartup
+                };
+                _jitterBuffer[frameId] = buffer;
+            }
+
+            // C. 写入数据 payload
+            // 假设你的服务端 MaxPacketSize=1400，即 payload=1392
+            int offset = packetIdx * 1392; 
+            
+            if (offset + payloadLen <= buffer.totalExpectedBytes)
+            {
+                Buffer.BlockCopy(data, 8, buffer.completeData, offset, payloadLen);
+                buffer.currentReceivedBytes += payloadLen;
+            }
+
+            // D. 完整性检查
+            if (buffer.currentReceivedBytes >= buffer.totalExpectedBytes)
+            {
+                PushToVLC(buffer.completeData);
+                _jitterBuffer.Remove(frameId);
+                
+                probeTotalBytesReceived += buffer.totalExpectedBytes;
+                probeTotalPacketsReceived++; 
+                bytesInSecond += buffer.totalExpectedBytes;
+            }
+        }
+    }
+
+    private void CleanupOldBuffers(ushort newId)
+    {
+        List<ushort> toRemove = new List<ushort>();
+        foreach(var key in _jitterBuffer.Keys)
+        {
+            int diff = newId - key;
+            if (diff < -30000) diff += 65536;
+
+            if (diff > maxReorderFrames || (Time.realtimeSinceStartup - _jitterBuffer[key].createTime > 0.5f))
+            {
+                toRemove.Add(key);
+            }
+        }
+
+        foreach(var k in toRemove)
+        {
+            _jitterBuffer.Remove(k);
+            droppedFramesCount++; 
+        }
+    }
+
+    private void PushToVLC(byte[] frameData)
+    {
+        if (_tcpStream != null)
+        {
+            try
+            {
+                _tcpStream.Write(frameData, 0, frameData.Length);
+            }
+            catch
+            {
+                CloseCurrentTcpClient();
+            }
+        }
+    }
+
     private void TcpAcceptLoop()
     {
         while (isRunning)
@@ -137,78 +228,80 @@ public class StreamForwarder : MonoBehaviour
                     Thread.Sleep(50);
                     continue;
                 }
-
-                // 一旦来老客户，先清退上一个
                 CloseCurrentTcpClient();
-
                 _currentTcpClient = _tcpListener.AcceptTcpClient();
-                // 配置 0 延迟推送参数
                 _currentTcpClient.NoDelay = true;
                 _currentTcpClient.SendBufferSize = 1024 * 1024 * 2;
                 _tcpStream = _currentTcpClient.GetStream();
-
-                UnityMainThreadDispatcher.Instance().Enqueue(() => {
-                    Debug.Log("<color=cyan>[图传内核] Unity 内部播放器连接成功！引擎点火！</color>");
-                });
-                
-                // 死循环探活，一旦发现 TCP Client 死亡，强制关闭并回到最上层等待
+                UnityMainThreadDispatcher.Instance().Enqueue(() => Debug.Log("<color=cyan>VLC Reconnected</color>"));
                 while (isRunning && _currentTcpClient.Connected)
                 {
                     if (_currentTcpClient.Client.Poll(0, SelectMode.SelectRead))
                     {
-                        byte[] checkBuf = new byte[1];
-                        if (_currentTcpClient.Client.Receive(checkBuf, SocketFlags.Peek) == 0)
-                            break; 
+                        if (_currentTcpClient.Client.Receive(new byte[1], SocketFlags.Peek) == 0) break;
                     }
                     Thread.Sleep(100);
                 }
-                
                 CloseCurrentTcpClient();
             }
             catch { }
         }
     }
-
+    
     private void CloseCurrentTcpClient()
     {
         if (_tcpStream != null) { try { _tcpStream.Close(); } catch { } _tcpStream = null; }
         if (_currentTcpClient != null) { try { _currentTcpClient.Close(); } catch { } _currentTcpClient = null; }
     }
-
-    // ====== 提供主界面速率日志 ======
+    
     void Update()
     {
         if (!isRunning) return;
-
         if (Time.time - lastLogTime >= 1.0f)
         {
             currentRateKbps = (int)((bytesInSecond * 8) / 1000);
-            
-            if (currentRateKbps > 0)
+            if (currentRateKbps > 0 || droppedFramesCount > 0)
             {
                 UnityMainThreadDispatcher.Instance().Enqueue(() => {
-                     Debug.Log($"[StreamForwarder] Bitrate: {currentRateKbps} kbps");
+                     Debug.Log($"[Stream] Bitrate: {currentRateKbps}kbps | Dropped Bad Frames: {droppedFramesCount}");
                 });
             }
-
             bytesInSecond = 0;
+            droppedFramesCount = 0;
             lastLogTime = Time.time;
         }
     }
-
-    void OnDestroy() => StopForwarding();
-    void OnApplicationQuit() => StopForwarding();
-
+    
     public void StopForwarding()
     {
         isRunning = false;
-        if (_udpClient != null) { try { _udpClient.Close(); } catch { } _udpClient = null; }
+
+        if (_udpClient != null) 
+        { 
+            try { _udpClient.Close(); } catch { } 
+            _udpClient = null; 
+        }
+        
         CloseCurrentTcpClient();
-        if (_tcpListener != null) { try { _tcpListener.Stop(); } catch { } _tcpListener = null; }
+        
+        if (_tcpListener != null) 
+        { 
+            try { _tcpListener.Stop(); } catch { } 
+            _tcpListener = null; 
+        }
+    }
+
+    void OnDestroy()
+    {
+        StopForwarding();
+    }
+
+    void OnApplicationQuit()
+    {
+        StopForwarding();
     }
 }
 
-// 内部单例列队保护，保持原样
 public class UnityMainThreadDispatcher : MonoBehaviour
 {
     private static UnityMainThreadDispatcher _instance;
@@ -225,11 +318,24 @@ public class UnityMainThreadDispatcher : MonoBehaviour
                 _instance = go.AddComponent<UnityMainThreadDispatcher>();
                 DontDestroyOnLoad(go);
             }
-            else { _instance = go.GetComponent<UnityMainThreadDispatcher>(); }
+            else
+            {
+                _instance = go.GetComponent<UnityMainThreadDispatcher>();
+            }
         }
         return _instance;
     }
 
-    public void Enqueue(Action action) => _executionQueue.Enqueue(action);
-    void Update() { while (_executionQueue.TryDequeue(out var action)) { action.Invoke(); } }
+    public void Enqueue(Action action)
+    {
+        _executionQueue.Enqueue(action);
+    }
+
+    void Update()
+    {
+        while (_executionQueue.TryDequeue(out var action))
+        {
+            action.Invoke();
+        }
+    }
 }
