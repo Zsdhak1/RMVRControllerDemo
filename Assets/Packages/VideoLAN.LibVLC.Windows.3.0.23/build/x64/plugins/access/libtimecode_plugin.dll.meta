@@ -1,8 +1,11 @@
 fileFormatVersion: 2
 guid: 7312141566491fb418f699cb11066f25
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 labels:
 - NuGetForUnity
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
 PluginImporter:
@@ -22,13 +25,19 @@ PluginImporter:
       enabled: 1
       settings: {}
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+>>>>>>> Stashed changes
   - first:
       Editor: Editor
     second:
       enabled: 0
       settings:
         DefaultValueInitialized: true
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
   userData: 
   assetBundleName: 

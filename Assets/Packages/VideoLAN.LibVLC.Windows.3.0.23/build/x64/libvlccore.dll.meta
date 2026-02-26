@@ -1,8 +1,11 @@
 fileFormatVersion: 2
 guid: 6c4adb14851f0fe4b9d430951c1e03b7
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 labels:
 - NuGetForUnity
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
 PluginImporter:
@@ -17,6 +20,7 @@ PluginImporter:
   validateReferences: 1
   platformData:
   - first:
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
       : Any
     second:
@@ -38,6 +42,8 @@ PluginImporter:
   - first:
 =======
 >>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
       Any: 
     second:
       enabled: 1
@@ -45,6 +51,7 @@ PluginImporter:
   - first:
       Editor: Editor
     second:
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
       enabled: 1
       settings:
@@ -75,6 +82,11 @@ PluginImporter:
       enabled: 1
       settings:
         CPU: x86_64
+=======
+      enabled: 0
+      settings:
+        DefaultValueInitialized: true
+>>>>>>> Stashed changes
 =======
       enabled: 0
       settings:
