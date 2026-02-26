@@ -1,7 +1,10 @@
 fileFormatVersion: 2
 guid: 2d03af295837b9340bc162be6a782582
+<<<<<<< Updated upstream
 labels:
 - NuGetForUnity
+=======
+>>>>>>> Stashed changes
 PluginImporter:
   externalObjects: {}
   serializedVersion: 2

@@ -1,7 +1,10 @@
 fileFormatVersion: 2
 guid: 0b253f01314b28c4c929a60a332d7492
+<<<<<<< Updated upstream
 labels:
 - NuGetForUnity
+=======
+>>>>>>> Stashed changes
 PluginImporter:
   externalObjects: {}
   serializedVersion: 2
@@ -18,6 +21,15 @@ PluginImporter:
     second:
       enabled: 1
       settings: {}
+<<<<<<< Updated upstream
+=======
+  - first:
+      Editor: Editor
+    second:
+      enabled: 0
+      settings:
+        DefaultValueInitialized: true
+>>>>>>> Stashed changes
   userData: 
   assetBundleName: 
   assetBundleVariant: 

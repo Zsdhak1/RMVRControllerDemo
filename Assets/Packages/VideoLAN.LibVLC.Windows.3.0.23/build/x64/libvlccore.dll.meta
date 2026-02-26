@@ -1,7 +1,10 @@
 fileFormatVersion: 2
 guid: 6c4adb14851f0fe4b9d430951c1e03b7
+<<<<<<< Updated upstream
 labels:
 - NuGetForUnity
+=======
+>>>>>>> Stashed changes
 PluginImporter:
   externalObjects: {}
   serializedVersion: 2
@@ -14,6 +17,7 @@ PluginImporter:
   validateReferences: 1
   platformData:
   - first:
+<<<<<<< Updated upstream
       : Any
     second:
       enabled: 0
@@ -32,6 +36,8 @@ PluginImporter:
         AndroidSharedLibraryType: Executable
         CPU: ARMv7
   - first:
+=======
+>>>>>>> Stashed changes
       Any: 
     second:
       enabled: 1
@@ -39,6 +45,7 @@ PluginImporter:
   - first:
       Editor: Editor
     second:
+<<<<<<< Updated upstream
       enabled: 1
       settings:
         CPU: AnyCPU
@@ -68,6 +75,11 @@ PluginImporter:
       enabled: 1
       settings:
         CPU: x86_64
+=======
+      enabled: 0
+      settings:
+        DefaultValueInitialized: true
+>>>>>>> Stashed changes
   userData: 
   assetBundleName: 
   assetBundleVariant: 
