@@ -2,6 +2,7 @@ using UnityEngine;
 using LibVLCSharp.Shared;
 using System;
 using System.Runtime.InteropServices;
+using System.Collections; // 加入协程依赖
 
 public class FreeRMVideoPlayer : MonoBehaviour
 {
@@ -41,11 +42,27 @@ public class FreeRMVideoPlayer : MonoBehaviour
         // 关键回调：把解码出的每一帧画面，刷进我们的指针里
         _mediaPlayer.SetVideoCallbacks(LockideoCallback, null, null);
 
+        // 【最核心的修改】不要在这里立刻连，开启 1.5 秒的协程等待！
+        StartCoroutine(DelayedIgnition());
+    }
+
+    /// <summary>
+    /// 解决 "Connection Refused" 报错的终极协程
+    /// 强制等待 StreamForwarder 把 TCP Server 建好之后再去扒门
+    /// </summary>
+    private IEnumerator DelayedIgnition()
+    {
+        // 给它一点时间发酵，如果你的 Quest 很卡，这里甚至可以填 2.0f
+        yield return new WaitForSeconds(1.5f);
+
+        Debug.Log("[FreeRMVideoPlayer] 1.5秒时序锁解除，开始拉流连接！");
+
         // 创建加载流
         var media = new Media(_libVLC, streamUrl, FromType.FromLocation);
+        // 【关键】声明解复用器
         media.AddOption(":demux=hevc");
 
-        // 直接点火
+        // 此时去 Play()，3335 端口大门敞开，流秒通！
         _mediaPlayer.Play(media);
     }
 
@@ -70,12 +87,8 @@ public class FreeRMVideoPlayer : MonoBehaviour
         _vlcTexture.Apply();
     }
 
-    // ====== 底层 LibVLCSharp C++ 到 C# 内存映射桥 ======
-    // 这里就是跨过了人家收费服务的地方，我们自己手搓！
-
     private uint VideoFormatCallback(ref IntPtr opaque, IntPtr chroma, ref uint width, ref uint height, ref uint pitches, ref uint lines)
     {
-        // 告诉 VLC，我们要的是纯正的 BGRA 色彩排列（Unity Texture 支持的最佳形式）
         byte[] format = System.Text.Encoding.ASCII.GetBytes("RV32");
         Marshal.Copy(format, 0, chroma, format.Length);
 
@@ -86,7 +99,6 @@ public class FreeRMVideoPlayer : MonoBehaviour
 
         int frameSize = (int)(width * height * 4);
         
-        // 分配一段死锁的内存常驻给 VLC 把图画上去
         if (_vlcPixelBuffer != IntPtr.Zero) Marshal.FreeHGlobal(_vlcPixelBuffer);
         _vlcPixelBuffer = Marshal.AllocHGlobal(frameSize);
 
@@ -95,7 +107,6 @@ public class FreeRMVideoPlayer : MonoBehaviour
 
     private IntPtr LockideoCallback(IntPtr opaque, IntPtr planes)
     {
-        // 当它要画图前，把我们买好的那块画布指给他
         Marshal.WriteIntPtr(planes, _vlcPixelBuffer);
         return IntPtr.Zero;
     }
@@ -110,4 +121,4 @@ public class FreeRMVideoPlayer : MonoBehaviour
         if (_libVLC != null) _libVLC.Dispose();
         if (_vlcPixelBuffer != IntPtr.Zero) Marshal.FreeHGlobal(_vlcPixelBuffer);
     }
-} 
+}
