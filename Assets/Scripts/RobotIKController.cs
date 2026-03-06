@@ -244,16 +244,13 @@ public class RobotIKController : MonoBehaviour
         {
             Vector3 rawPos = activeTarget.position + activeTarget.TransformDirection(gripOffset);
             
-            // 安全区保护 (防止打到底座内部)
-            Vector3 baseToTarget = rawPos - transform.position;
-            float safeRadius = 0.3f; // 简单安全半径
-            if (baseToTarget.magnitude < safeRadius)
-            {
-                rawPos = transform.position + baseToTarget.normalized * safeRadius;
-            }
-
-            // 【重要】已移除之前那个导致无法伸直的 maxReach 强行限制代码
-            // 现在依靠数学算法自然伸展
+            // 【调试】暂时停用安全区保护，测试是否为死区导致的问题
+            // Vector3 baseToTarget = rawPos - transform.position;
+            // float safeRadius = 0.3f;
+            // if (baseToTarget.magnitude < safeRadius)
+            // {
+            //     rawPos = transform.position + baseToTarget.normalized * safeRadius;
+            // }
 
             // 输入平滑：过滤手抖
             smoothedInputPos = Vector3.SmoothDamp(smoothedInputPos, rawPos, ref currentVelocityPos, inputSmoothTime);
@@ -318,16 +315,25 @@ public class RobotIKController : MonoBehaviour
         // 步骤2：解析计算腕部偏移（不使用 Ghost Rig）
         Vector3 wristOffset = CalculateWristOffsetAnalytical(j4, j5, j6);
         
-        // 【调试】输出偏移值检查
-        if (Time.frameCount % 60 == 0) {
-            Debug.Log($"[IK] OffsetJ4J5={Offset_J4_to_J5}, OffsetJ5J6={Offset_J5_to_J6}, WristOffset={wristOffset.magnitude:F3}");
-        }
+        // 【调试】输出偏移值和目标位置（在计算完成后输出）
         
         // 将腕部偏移转换到世界空间
-        Vector3 wristOffsetWorld = baseRot * wristOffset;
+        // 【修复】wristOffset 已在底座坐标系中（含J1），直接转换到世界方向即可
+        Vector3 wristOffsetWorld = transform.TransformDirection(wristOffset);
         
         // 步骤3：反推 J4 平台目标位置
         Vector3 platformTarget = targetPos - wristOffsetWorld;
+        
+        // 【调试】暂时停用 minReach 限制，测试是否为死区导致的问题
+        // 如果问题消失，说明是 minReach 限制引起的
+        // 如果问题仍然存在，需要检查其他原因
+        Vector3 localPlatformTarget = transform.InverseTransformPoint(platformTarget);
+        // float minReach = 0.2f;
+        // if (localPlatformTarget.z < minReach)
+        // {
+        //     localPlatformTarget.z = minReach;
+        //     platformTarget = transform.TransformPoint(localPlatformTarget);
+        // }
         
         // 【修复】考虑 J4_Drop_Offset，将 J4 平台位置转换为 J3 尖端位置
         // 注：shoulderHeight 已经在 Start() 中校准为固定值，不随运行时变化
@@ -336,6 +342,12 @@ public class RobotIKController : MonoBehaviour
         // 步骤4：解算 J1
         Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
         float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
+        
+        // 【调试】输出目标位置
+        if (Time.frameCount % 30 == 0 || flatDist < 0.2f)
+        {
+            Debug.Log($"[IK] targetPos=({targetPos.x:F2},{targetPos.y:F2},{targetPos.z:F2}), platformTarget=({platformTarget.x:F2},{platformTarget.y:F2},{platformTarget.z:F2}), localTarget=({localTarget.x:F2},{localTarget.y:F2},{localTarget.z:F2}), flatDist={flatDist:F2}");
+        }
         
         // 步骤4：觧 J1
         // 【修复】当目标靠近底座中心时，使用特殊处理避免突变
@@ -464,6 +476,16 @@ public class RobotIKController : MonoBehaviour
 
             // 反推 J4 目标位置
             Vector3 platformTarget = targetPos - wristOffsetWorld;
+            
+            // 【调试】暂时停用 minReach 限制
+            Vector3 localPlatformTarget = transform.InverseTransformPoint(platformTarget);
+            // float minReach = 0.15f;
+            // if (localPlatformTarget.z < minReach)
+            // {
+            //     localPlatformTarget.z = minReach;
+            //     platformTarget = transform.TransformPoint(localPlatformTarget);
+            // }
+            
             Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
             Vector3 rootLocalTarget = transform.InverseTransformPoint(j3TipTarget);
             
@@ -535,8 +557,24 @@ public class RobotIKController : MonoBehaviour
             Debug.Log($"[SolveArm] shHeight={shoulderHeight:F2}, tgt=({target.x:F2},{target.y:F2}), flatD={flatDist:F2}, y={y:F2}, D={D:F2}, beta={beta*Mathf.Rad2Deg:F1}, alpha={alpha*Mathf.Rad2Deg:F1}, J2={calcJ2:F1}, J3={calcJ3:F1}");
         }
 
-        targetIKAngles[1] = (beta + alpha) * Mathf.Rad2Deg; 
-        targetIKAngles[2] = (Mathf.PI - gamma) * Mathf.Rad2Deg; 
+        // 计算 J2/J3 角度
+        float j2Angle = (beta + alpha) * Mathf.Rad2Deg;
+        float j3Angle = (Mathf.PI - gamma) * Mathf.Rad2Deg;
+        
+        // 【修复】J3 的绝对角度限位：使用目标J2角度（而非输出J2）计算，避免时序不一致导致的跳变
+        if (jointLimits.Length > 2)
+        {
+            JointConfig j3Limit = jointLimits[2];
+            // 计算小臂相对于水平面的绝对角度 = J2 + J3
+            float absoluteAngle = j2Angle + j3Angle;
+            // 将绝对角度限制在范围内
+            float clampedAbsolute = Mathf.Clamp(absoluteAngle, j3Limit.minAngle, j3Limit.maxAngle);
+            // 反推回 J3 的相对角度
+            j3Angle = clampedAbsolute - j2Angle;
+        }
+
+        targetIKAngles[1] = j2Angle;
+        targetIKAngles[2] = j3Angle; 
     }
 
     Vector3 RobustDecompose(Quaternion q) {
@@ -595,24 +633,9 @@ public class RobotIKController : MonoBehaviour
         float angle = NormalizeAngle(outAngles[index]);
         if (index < jointLimits.Length) {
             JointConfig limit = jointLimits[index];
-            
-            // 【修复】J3 的限位基于与水平面的绝对角度（J2 + J3）
-            if (index == 2) // J3 小臂
-            {
-                // 计算小臂相对于水平面的绝对角度
-                float j2Angle = NormalizeAngle(outAngles[1]); // J2 大臂角度
-                float absoluteAngle = j2Angle + angle; // 绝对角度 = J2 + J3
-                
-                // 将绝对角度限制在范围内
-                float clampedAbsolute = Mathf.Clamp(absoluteAngle, limit.minAngle, limit.maxAngle);
-                
-                // 反推回 J3 的相对角度
-                angle = clampedAbsolute - j2Angle;
-            }
-            else
-            {
-                angle = Mathf.Clamp(angle, limit.minAngle, limit.maxAngle);
-            }
+            // J3 的绝对角度限位已在 SolveArmPosition 中处理
+            // 这里只做简单的单关节限位作为后备保护
+            angle = Mathf.Clamp(angle, limit.minAngle, limit.maxAngle);
         }
         outAngles[index] = angle;
     }
@@ -622,14 +645,7 @@ public class RobotIKController : MonoBehaviour
         JointConfig limit = jointLimits[index];
         if (limit.meshRenderer == null) return;
         float angle = outAngles[index];
-        
-        // 【修复】J3 的限位检测也基于绝对角度
-        if (index == 2) // J3 小臂
-        {
-            float j2Angle = NormalizeAngle(outAngles[1]);
-            angle = j2Angle + angle; // 转换为绝对角度
-        }
-        
+        // J3 限位检测使用相对角度（绝对限位已在 SolveArmPosition 处理）
         bool atLimit = (angle <= limit.minAngle + 2f) || (angle >= limit.maxAngle - 2f);
         limit.meshRenderer.GetPropertyBlock(propBlock);
         propBlock.SetColor("_Color", atLimit ? warningColor : normalColor);
