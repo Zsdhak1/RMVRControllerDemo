@@ -6,6 +6,7 @@ public class DirectGrabController : MonoBehaviour
     [Header("引用")]
     public Grabbable grabbable;      // Meta的抓取组件
     public Transform robotEndTip;    // 机械臂真实的末端位置(Joint7)
+    public Transform robotWrist;     // 【新增】腕部中心(Joint6)，把手位置对应此点
     public RobotIKController ikController; // 我们的IK解算器
 
     private bool isGrabbed = false;
@@ -40,12 +41,14 @@ public class DirectGrabController : MonoBehaviour
 
     void Update()
     {
-        // 如果没被抓取，把手要时刻跟随机械臂末端
+        // 如果没被抓取，把手要时刻跟随腕部中心(J6)
         // 这样你下次伸手时，把手就在正确的位置
-        if (!isGrabbed && robotEndTip != null)
+        if (!isGrabbed && robotWrist != null)
         {
-            transform.position = robotEndTip.position;
-            transform.rotation = robotEndTip.rotation;
+            // 把手位置对应 J6 位置
+            transform.position = robotWrist.position;
+            // 把手旋转对应 J6 旋转（J4/J5/J6 的组合姿态）
+            transform.rotation = robotWrist.rotation;
         }
     }
 }
