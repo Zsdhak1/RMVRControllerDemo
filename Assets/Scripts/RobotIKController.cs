@@ -95,6 +95,8 @@ public class RobotIKController : MonoBehaviour
     private Vector3 smoothedInputPos; 
     private Quaternion smoothedInputRot;
     private float lastJ4Angle = 0f;
+    private float lastJ5Angle = 0f;  // 【新增】追踪 J5 连续角度
+    private float lastJ6Angle = 0f;  // 【新增】追踪 J6 连续角度
     private MaterialPropertyBlock propBlock;
 
     void Start()
@@ -105,6 +107,11 @@ public class RobotIKController : MonoBehaviour
         // 【重要】先初始化角度（重置为初始姿态或保持当前姿态）
         // 这确保后续校准在正确的姿态下进行
         InitializeAnglesFromVisuals();
+        
+        // 初始化连续角度追踪
+        lastJ4Angle = targetIKAngles[3];
+        lastJ5Angle = targetIKAngles[4];
+        lastJ6Angle = targetIKAngles[5];
         
         // 自动校准臂长（在初始化姿态之后进行，确保测量时模型在正确位置）
         if (autoCalibrate && visual_J2 && ref_J3_Pivot && ref_J4_Pivot)
@@ -221,6 +228,75 @@ public class RobotIKController : MonoBehaviour
 
     public void StopTracking() { activeTarget = null; isTracking = false; }
     
+    // 【新增】设置控制模式（供 UI 按钮调用）
+    public void SetControlMode(ControlMode mode)
+    {
+        if (controlMode != mode)
+        {
+            controlMode = mode;
+            Debug.Log($"[RobotIK] 控制模式切换为: {mode}");
+            
+            // 切换模式时重置平滑参数，避免突变
+            if (activeTarget != null)
+            {
+                smoothedInputPos = activeTarget.position + activeTarget.TransformDirection(gripOffset);
+                smoothedInputRot = activeTarget.rotation;
+                currentVelocityPos = Vector3.zero;
+            }
+            
+            // 重置连续角度追踪
+            lastJ4Angle = targetIKAngles[3];
+            lastJ5Angle = targetIKAngles[4];
+            lastJ6Angle = targetIKAngles[5];
+        }
+    }
+    
+    // 获取当前控制模式（供 UI 检测当前状态）
+    public ControlMode GetControlMode() { return controlMode; }
+    
+    // 【新增】一键重置姿态到初始角度
+    public void ResetToInitialPose()
+    {
+        if (initialAngles == null || initialAngles.Length < 7)
+        {
+            Debug.LogWarning("[RobotIK] 初始角度未配置，无法重置姿态");
+            return;
+        }
+        
+        // 立即设置目标角度
+        for (int i = 0; i < 7; i++)
+        {
+            targetIKAngles[i] = NormalizeAngle(initialAngles[i]);
+            outAngles[i] = targetIKAngles[i];
+        }
+        
+        // 清空速度缓存，防止平滑过渡
+        Array.Clear(jointVelocities, 0, 7);
+        currentVelocityPos = Vector3.zero;
+        
+        // 重置连续角度追踪
+        lastJ4Angle = targetIKAngles[3];
+        lastJ5Angle = targetIKAngles[4];
+        lastJ6Angle = targetIKAngles[5];
+        
+        // 如果正在追踪，重新初始化平滑参数
+        if (isTracking && activeTarget != null)
+        {
+            smoothedInputPos = activeTarget.position + activeTarget.TransformDirection(gripOffset);
+            smoothedInputRot = activeTarget.rotation;
+        }
+        
+        // 立即应用到视觉模型
+        ApplyToVisuals();
+        
+        Debug.Log($"[RobotIK] 姿态已重置到初始角度: [{string.Join(", ", initialAngles)}]");
+    }
+    
+    // 【新增】快速设置特定模式（供 UnityEvent 使用）
+    public void SetModeIK() => SetControlMode(ControlMode.InverseKinematics);
+    public void SetModeDirect() => SetControlMode(ControlMode.DirectAngleMapping);
+    public void ToggleMode() => SetControlMode(controlMode == ControlMode.InverseKinematics ? ControlMode.DirectAngleMapping : ControlMode.InverseKinematics);
+    
     // 获取发送给下位机的数据包
     public byte[] GetPacketData()
     {
@@ -256,14 +332,23 @@ public class RobotIKController : MonoBehaviour
             smoothedInputPos = Vector3.SmoothDamp(smoothedInputPos, rawPos, ref currentVelocityPos, inputSmoothTime);
             smoothedInputRot = Quaternion.Slerp(smoothedInputRot, activeTarget.rotation, Time.deltaTime * 15f);
 
-            // 根据设置选择 IK 算法
-            if (useImprovedIK)
+            // 根据控制模式选择处理方式
+            if (controlMode == ControlMode.DirectAngleMapping)
             {
-                SolveImprovedIK(smoothedInputPos, smoothedInputRot);
+                // 直接角度映射模式：把手位置直接作为J4平台位置，把手旋转直接映射到J4-J6
+                SolveDirectAngleMapping(smoothedInputPos, smoothedInputRot);
             }
             else
             {
-                SolveIterativeIK(smoothedInputPos, smoothedInputRot);
+                // 逆运动学模式
+                if (useImprovedIK)
+                {
+                    SolveImprovedIK(smoothedInputPos, smoothedInputRot);
+                }
+                else
+                {
+                    SolveIterativeIK(smoothedInputPos, smoothedInputRot);
+                }
             }
         }
 
@@ -377,7 +462,8 @@ public class RobotIKController : MonoBehaviour
         // 步骤6：赋值 J4-J6
         targetIKAngles[3] = j4;
         targetIKAngles[4] = NormalizeAngle(j5);
-        targetIKAngles[5] = j6;
+        // 【修复】使用连续角度计算防止 J6 万向节锁跳变，并限制在安全范围
+        targetIKAngles[5] = CalculateContinuousJ6(j6);
         
         lastJ4Angle = j4;
     }
@@ -407,6 +493,92 @@ public class RobotIKController : MonoBehaviour
         // J7 独立控制，不影响位置解算
         
         return offset;
+    }
+    
+    // 【新增】计算连续角度，防止 -180/+180 跳变
+    // rawAngle: 当前计算的原始角度（可能跳变）
+    // lastAngle: 上次的连续角度
+    // 返回: 与上次角度连续的新角度
+    float CalculateContinuousAngle(float rawAngle, ref float lastAngle)
+    {
+        // 使用 DeltaAngle 找到最短路径变化
+        float delta = Mathf.DeltaAngle(lastAngle, rawAngle);
+        float continuousAngle = lastAngle + delta;
+        
+        // 更新上次角度记录
+        lastAngle = continuousAngle;
+        
+        return continuousAngle;
+    }
+    
+    // 【新增】计算 J6 连续角度，防止万向节锁跳变，并限制在安全范围
+    // 【重要】此处不再限制在 [-85, 85]，而是允许完整的 -180~+180 旋转
+    float CalculateContinuousJ6(float rawJ6)
+    {
+        // 第一步：将原始角度转换为与 lastJ6Angle 最接近的等效角度
+        float delta = Mathf.DeltaAngle(lastJ6Angle, rawJ6);
+        float continuousJ6 = lastJ6Angle + delta;
+        
+        // 更新上次角度记录
+        lastJ6Angle = continuousJ6;
+        
+        return continuousJ6;
+    }
+    
+    // ============================================================================
+    // 【新增】直接角度映射模式（Direct Angle Mapping）
+    // 把手直接控制 J4 平台位置和 J4-J6 角度
+    // ============================================================================
+    void SolveDirectAngleMapping(Vector3 targetPos, Quaternion targetRot)
+    {
+        // 步骤1：直接使用把手位置作为 J4 平台目标位置（无需腕部偏移计算）
+        Vector3 platformTarget = targetPos;
+        
+        // 步骤2：考虑 J4_Drop_Offset，转换为 J3 尖端目标
+        Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
+        
+        // 步骤3：解算 J1
+        Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
+        float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
+        
+        float currentJ1 = targetIKAngles[0];
+        float targetJ1 = currentJ1;
+        
+        if (flatDist > j1DeadZoneRadius)
+        {
+            // 正常区域：计算 J1 角度
+            float rawJ1 = Mathf.Atan2(localTarget.x, localTarget.z) * Mathf.Rad2Deg;
+            float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
+            targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+        }
+        // 死区内保持 currentJ1 不变
+        
+        targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+        targetIKAngles[0] = targetJ1;
+        
+        // 步骤4：解算 J2/J3
+        SolveArmPosition(localTarget, targetJ1);
+        
+        // 步骤5：直接角度映射 - 把手旋转直接映射到 J4-J6
+        // 将把手旋转从世界空间转换到底座坐标系
+        Quaternion baseRot = Quaternion.Euler(0, targetJ1, 0);
+        Quaternion wristLocalRot = Quaternion.Inverse(baseRot) * targetRot;
+        
+        // 直接提取 Euler 角作为 J4-J6 目标
+        Vector3 euler = wristLocalRot.eulerAngles;
+        float rawJ4 = NormalizeAngle(euler.y);  // Yaw
+        float rawJ5 = NormalizeAngle(euler.z);  // Roll
+        float rawJ6 = NormalizeAngle(euler.x);  // Pitch
+        
+        // 【修复】使用连续角度计算防止 -180/+180 跳变
+        float j4 = CalculateContinuousAngle(rawJ4, ref lastJ4Angle);
+        float j5 = CalculateContinuousAngle(rawJ5, ref lastJ5Angle);
+        float j6 = CalculateContinuousJ6(rawJ6);
+        
+        // 应用角度到目标
+        targetIKAngles[3] = j4;
+        targetIKAngles[4] = j5;
+        targetIKAngles[5] = j6;
     }
     
     // 【新增】解析旋转分解（针对机械臂轴向优化）
@@ -510,7 +682,8 @@ public class RobotIKController : MonoBehaviour
 
             targetIKAngles[3] = j4;
             targetIKAngles[4] = NormalizeAngle(j5);
-            targetIKAngles[5] = j6;
+            // 【修复】使用连续角度计算防止 J6 万向节锁跳变
+            targetIKAngles[5] = CalculateContinuousJ6(j6);
         }
         lastJ4Angle = targetIKAngles[3];
     }
@@ -561,20 +734,36 @@ public class RobotIKController : MonoBehaviour
         float j2Angle = (beta + alpha) * Mathf.Rad2Deg;
         float j3Angle = (Mathf.PI - gamma) * Mathf.Rad2Deg;
         
-        // 【修复】J3 的绝对角度限位：使用目标J2角度（而非输出J2）计算，避免时序不一致导致的跳变
+        // 【修复】J3 限位：直接通过几何计算小臂绝对角度，不依赖 J2
+        // 小臂绝对角度 = 目标方向角 beta + 大臂偏角 alpha - (两臂夹角补角 180-gamma)
+        //              = beta + alpha + gamma - 180°
         if (jointLimits.Length > 2)
         {
             JointConfig j3Limit = jointLimits[2];
-            // 计算小臂相对于水平面的绝对角度 = J2 + J3
-            float absoluteAngle = j2Angle + j3Angle;
-            // 将绝对角度限制在范围内
-            float clampedAbsolute = Mathf.Clamp(absoluteAngle, j3Limit.minAngle, j3Limit.maxAngle);
-            // 反推回 J3 的相对角度
-            j3Angle = clampedAbsolute - j2Angle;
+            
+            // 直接从三角几何计算小臂绝对角度，不使用 j2Angle 或 j3Angle
+            float absoluteAngle = (beta + alpha + gamma - Mathf.PI) * Mathf.Rad2Deg;
+            
+            // 硬限位：如果超出范围，重新计算 J3
+            if (absoluteAngle < j3Limit.minAngle)
+            {
+                // 小臂太低，需要抬起
+                float targetGamma = (j3Limit.minAngle * Mathf.Deg2Rad - beta - alpha + Mathf.PI);
+                // 限制 gamma 在有效范围内 [0, π]
+                targetGamma = Mathf.Clamp(targetGamma, 0.01f, Mathf.PI - 0.01f);
+                j3Angle = (Mathf.PI - targetGamma) * Mathf.Rad2Deg;
+            }
+            else if (absoluteAngle > j3Limit.maxAngle)
+            {
+                // 小臂太高，需要压低
+                float targetGamma = (j3Limit.maxAngle * Mathf.Deg2Rad - beta - alpha + Mathf.PI);
+                targetGamma = Mathf.Clamp(targetGamma, 0.01f, Mathf.PI - 0.01f);
+                j3Angle = (Mathf.PI - targetGamma) * Mathf.Rad2Deg;
+            }
         }
 
         targetIKAngles[1] = j2Angle;
-        targetIKAngles[2] = j3Angle; 
+        targetIKAngles[2] = j3Angle;
     }
 
     Vector3 RobustDecompose(Quaternion q) {
