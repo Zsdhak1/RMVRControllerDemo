@@ -46,6 +46,25 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
     private float _lastLogTime;
     private int _queueSizeAtLastLog = 0;
     
+    // 用于外部监控的公共属性
+    public bool isRunning => _isRunning;
+    public long probeTotalPacketsReceived => _totalUdpPackets;
+    public int currentRateKbps { get; private set; }
+    public bool isTcpConnected => _tcpConnected;
+    public long totalBytesSent => _totalBytesSent;
+    public long droppedPackets => _droppedPackets;
+    public int queueSize 
+    { 
+        get 
+        { 
+            lock (_queueLock) { return _sendQueue.Count; }
+        }
+    }
+    
+    // 速率计算
+    private long _bytesInLastSecond = 0;
+    private float _rateUpdateTimer = 0f;
+    
     // Logging
     private StreamWriter _logWriter;
     private readonly object _logLock = new object();
@@ -75,7 +94,16 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
         // 发送所有 queued 数据
         SendAllQueuedData();
         
-        // 统计
+        // 计算实时速率 (Kbps)
+        _rateUpdateTimer += Time.deltaTime;
+        if (_rateUpdateTimer >= 1.0f)
+        {
+            currentRateKbps = (int)(_bytesInLastSecond * 8 / 1024);
+            _bytesInLastSecond = 0;
+            _rateUpdateTimer = 0f;
+        }
+        
+        // 统计日志
         if (Time.time - _lastLogTime >= 3.0f)
         {
             _lastLogTime = Time.time;
@@ -182,6 +210,7 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
         if (data != null && data.Length > 8)
         {
             _totalUdpPackets++;
+            _bytesInLastSecond += data.Length; // 统计接收速率
             
             // 去掉8字节头
             int len = data.Length - 8;
@@ -251,6 +280,7 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
                     {
                         _tcpStream.Write(data, 0, data.Length);
                         _totalBytesSent += data.Length;
+                        _bytesInLastSecond += data.Length;
                         _totalTcpPackets++;
                         sentThisFrame++;
                     }

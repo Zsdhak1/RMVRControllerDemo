@@ -9,7 +9,7 @@ public class SystemMonitorUI : MonoBehaviour
     public TextMeshProUGUI monitorText; 
     
     [Header("=== Target Scripts ===")]
-    public FreeRMMemoryVideoPlayer rmVideoPlayer; 
+    public FreeRMVideoPlayerTCP rmVideoPlayer; 
 
     private StringBuilder sb = new StringBuilder();
     private float updateTimer = 0f;
@@ -18,7 +18,7 @@ public class SystemMonitorUI : MonoBehaviour
     {
         if (rmVideoPlayer == null) 
         {
-            Debug.LogWarning("[SystemMonitorUI] 监视大盘：你忘了拖入 FreeRMMemoryVideoPlayer！");
+            Debug.LogWarning("[SystemMonitorUI] 监视大盘：你忘了拖入 FreeRMVideoPlayerTCP！");
         }
     }
 
@@ -40,23 +40,30 @@ public class SystemMonitorUI : MonoBehaviour
 
         sb.AppendLine("<size=120%><b><color=#FFD700>=== RMVR 系统调试大盘 ===</color></b></size>\n");
 
-        sb.AppendLine("<b>[ 图传底层：UDP 内存融合 ]</b>");
+        sb.AppendLine("<b>[ 图传底层：UDP->TCP 转发 ]</b>");
         if (rmVideoPlayer != null)
         {
             bool isRun = rmVideoPlayer.isRunning;
+            bool isTcpConnected = rmVideoPlayer.isTcpConnected;
 
             string statusColor = isRun ? "green" : "red";
-            sb.AppendLine($"接收伺服引擎: <color={statusColor}>{(isRun ? "正在运行" : "掉线")}</color>");
+            sb.AppendLine($"UDP接收引擎: <color={statusColor}>{(isRun ? "正在运行" : "已停止")}</color>");
+            
+            string tcpColor = isTcpConnected ? "green" : "yellow";
+            sb.AppendLine($"TCP转发状态: <color={tcpColor}>{(isTcpConnected ? "已连接" : "等待连接")}</color>");
 
             float mbps = rmVideoPlayer.currentRateKbps / 1000f;
             string netColor = mbps > 0.5f ? "green" : (mbps > 0f ? "yellow" : "red");
-            sb.AppendLine($"瞬时 UDP 吞吐量: <color={netColor}>{mbps:F2} Mbps</color>");
+            sb.AppendLine($"瞬时吞吐速率: <color={netColor}>{mbps:F2} Mbps</color>");
             
-            sb.AppendLine($"收讫物理帧包: {rmVideoPlayer.probeTotalPacketsReceived}");
+            sb.AppendLine($"收讫UDP包数: {rmVideoPlayer.probeTotalPacketsReceived}");
+            sb.AppendLine($"转发字节数: {rmVideoPlayer.totalBytesSent / 1024 / 1024} MB");
+            sb.AppendLine($"丢弃包数: {rmVideoPlayer.droppedPackets}");
+            sb.AppendLine($"缓冲队列: {rmVideoPlayer.queueSize}");
 
             if (mbps == 0 && isRun)
             {
-                sb.AppendLine("<color=red>警告: 接不到图传信道</color>");
+                sb.AppendLine("<color=red>警告: 当前无视频数据流入</color>");
             }
         }
         else

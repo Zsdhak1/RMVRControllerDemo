@@ -2,295 +2,169 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// 弧形Canvas - 将已布局好的平面Canvas整体弯曲成弧形
-/// 使用方法：挂载到已摆好UI的父物体上，设置centerPoint为布局中心
+/// 弧形Canvas - 将UI分块排列成弧形，保持每块内部布局不变
 /// </summary>
 public class CurvedCanvas : MonoBehaviour
 {
+    [Header("UI分块（保持内部布局）")]
+    [Tooltip("将UI分为左/中/右三个部分，每个部分的内部布局保持不变")]
+    public RectTransform leftPanel;
+    public RectTransform centerPanel;
+    public RectTransform rightPanel;
+
     [Header("弧形参数")]
-    [Tooltip("弧形半径（米）")]
-    public float radius = 1.5f;
-    
-    [Tooltip("弧形弯曲强度(0=平面, 1=完整弧形)")]
-    [Range(0f, 2f)]
-    public float curveStrength = 0.5f;
+    public float radius = 1.2f;
+    public float arcAngle = 160f;
+    public float heightOffset = -0.2f;
 
-    [Header("布局中心")]
-    [Tooltip("布局中心点（局部坐标），以此点为基准弯曲")]
-    public Vector3 centerPoint = Vector3.zero;
-    
-    [Tooltip("自动计算中心点（取所有子物体的中心）")]
-    public bool autoCenter = true;
+    [Header("偏移微调")]
+    public Vector3 leftPanelOffset;
+    public Vector3 centerPanelOffset;
+    public Vector3 rightPanelOffset;
 
-    [Header("轴向设置")]
-    [Tooltip("弯曲轴向）")]
-    public CurveAxis curveAxis = CurveAxis.Horizontal;
-    
-    [Tooltip("弯曲方向(1或-1)")]
-    public float curveDirection = 1f;
+    [Header("跟随头部")]
+    public Transform headTransform;
+    public bool followHead = true;
+    public float followSpeed = 5f;
 
-    [Header("高级设置")]
-    [Tooltip("是否包含非激活物体")]
-    public bool includeInactive = false;
-    
-    [Tooltip("运行时实时更新（性能开销较大）")]
-    public bool updateInRuntime = false;
-    
-    [Tooltip("平滑过渡时间（秒，0=立即）")]
-    public float transitionTime = 0f;
+    [Header("自动查找")]
+    public bool autoFindOVRCamera = true;
 
-    public enum CurveAxis { Horizontal, Vertical }
-
-    // 存储原始位置
-    private Dictionary<Transform, OriginalTransform> originalTransforms = new Dictionary<Transform, OriginalTransform>();
-    private float currentCurveStrength = 0f;
-    private float targetCurveStrength = 0f;
-    private float transitionTimer = 0f;
-
-    private struct OriginalTransform
-    {
-        public Vector3 localPosition;
-        public Quaternion localRotation;
-        public Vector3 localScale;
-    }
+    private Transform[] panels;
+    private Vector3[] offsets;
 
     void Start()
     {
-        SaveOriginalTransforms();
-        targetCurveStrength = curveStrength;
-        currentCurveStrength = transitionTime > 0 ? 0f : curveStrength;
-        ApplyCurve();
+        // 自动查找相机
+        if (headTransform == null && autoFindOVRCamera)
+        {
+            var cameraRig = FindObjectOfType<OVRCameraRig>();
+            if (cameraRig != null) headTransform = cameraRig.centerEyeAnchor;
+        }
+
+        InitializePanels();
     }
 
     void Update()
     {
-        if (updateInRuntime && transitionTimer <= 0)
+        if (followHead && headTransform != null)
         {
-            ApplyCurve();
-        }
-
-        // 处理平滑过渡
-        if (transitionTimer > 0)
-        {
-            transitionTimer -= Time.deltaTime;
-            float t = 1f - (transitionTimer / transitionTime);
-            currentCurveStrength = Mathf.Lerp(0f, targetCurveStrength, Mathf.SmoothStep(0f, 1f, t));
-            ApplyCurve();
+            UpdateFollow();
         }
     }
 
     void OnValidate()
     {
-        if (Application.isEditor && !Application.isPlaying)
+        if (Application.isEditor && panels != null)
         {
-            if (originalTransforms.Count == 0)
+            RefreshLayout();
+        }
+    }
+
+    void InitializePanels()
+    {
+        // 收集面板
+        var panelList = new List<Transform>();
+        var offsetList = new List<Vector3>();
+
+        if (leftPanel != null) { panelList.Add(leftPanel); offsetList.Add(leftPanelOffset); }
+        if (centerPanel != null) { panelList.Add(centerPanel); offsetList.Add(centerPanelOffset); }
+        if (rightPanel != null) { panelList.Add(rightPanel); offsetList.Add(rightPanelOffset); }
+
+        panels = panelList.ToArray();
+        offsets = offsetList.ToArray();
+
+        // 确保所有面板是World Space模式
+        foreach (var p in panels)
+        {
+            var canvas = p.GetComponent<Canvas>();
+            if (canvas == null)
             {
-                SaveOriginalTransforms();
+                canvas = p.gameObject.AddComponent<Canvas>();
             }
-            targetCurveStrength = curveStrength;
-            currentCurveStrength = curveStrength;
-            ApplyCurve();
-        }
-    }
-
-    void OnEnable()
-    {
-        if (originalTransforms.Count > 0)
-        {
-            ApplyCurve();
-        }
-    }
-
-    /// <summary>
-    /// 保存所有子物体的原始变换
-    /// </summary>
-    public void SaveOriginalTransforms()
-    {
-        originalTransforms.Clear();
-        
-        RectTransform[] children = GetComponentsInChildren<RectTransform>(includeInactive);
-        foreach (var child in children)
-        {
-            if (child == transform) continue; // 跳过自己
+            canvas.renderMode = RenderMode.WorldSpace;
             
-            originalTransforms[child] = new OriginalTransform
+            // 添加GraphicRaycaster用于交互
+            if (p.GetComponent<UnityEngine.UI.GraphicRaycaster>() == null)
             {
-                localPosition = child.localPosition,
-                localRotation = child.localRotation,
-                localScale = child.localScale
-            };
+                p.gameObject.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+            }
         }
 
-        if (autoCenter && originalTransforms.Count > 0)
+        RefreshLayout();
+    }
+
+    public void RefreshLayout()
+    {
+        if (panels == null || panels.Length == 0) return;
+
+        float angleStep = arcAngle / Mathf.Max(1, panels.Length - 1);
+        float startAngle = -arcAngle / 2f;
+
+        for (int i = 0; i < panels.Length; i++)
         {
-            CalculateAutoCenter();
+            if (panels[i] == null) continue;
+
+            float angle = startAngle + angleStep * i;
+            PositionPanel(panels[i], angle, offsets[i]);
         }
     }
 
-    /// <summary>
-    /// 自动计算布局中心
-    /// </summary>
-    void CalculateAutoCenter()
+    void PositionPanel(Transform panel, float angle, Vector3 offset)
     {
-        Vector3 min = Vector3.one * float.MaxValue;
-        Vector3 max = Vector3.one * float.MinValue;
-
-        foreach (var kvp in originalTransforms)
-        {
-            Vector3 pos = kvp.Value.localPosition;
-            min = Vector3.Min(min, pos);
-            max = Vector3.Max(max, pos);
-        }
-
-        centerPoint = (min + max) / 2f;
-    }
-
-    /// <summary>
-    /// 应用弧形弯曲
-    /// </summary>
-    public void ApplyCurve()
-    {
-        if (originalTransforms.Count == 0) return;
-
-        float currentRadius = radius / Mathf.Max(0.01f, currentCurveStrength);
-
-        foreach (var kvp in originalTransforms)
-        {
-            Transform child = kvp.Key;
-            OriginalTransform original = kvp.Value;
-
-            // 计算相对于中心点的偏移
-            Vector3 offset = original.localPosition - centerPoint;
-
-            // 根据轴向计算角度
-            float distance = curveAxis == CurveAxis.Horizontal ? offset.x : offset.y;
-            float angle = distance / currentRadius * curveDirection;
-
-            // 计算弧形上的新位置
-            Vector3 curvedPosition;
-            if (curveAxis == CurveAxis.Horizontal)
-            {
-                curvedPosition = new Vector3(
-                    Mathf.Sin(angle) * currentRadius,
-                    offset.y,
-                    Mathf.Cos(angle) * currentRadius - currentRadius
-                );
-            }
-            else
-            {
-                curvedPosition = new Vector3(
-                    offset.x,
-                    Mathf.Sin(angle) * currentRadius,
-                    Mathf.Cos(angle) * currentRadius - currentRadius
-                );
-            }
-
-            // 应用位置
-            child.localPosition = centerPoint + curvedPosition;
-
-            // 应用旋转（让元素朝向弧形切线方向）
-            if (currentCurveStrength > 0.01f)
-            {
-                float rotAngle = -angle * Mathf.Rad2Deg * curveDirection;
-                Vector3 rotAxis = curveAxis == CurveAxis.Horizontal ? Vector3.up : Vector3.right;
-                child.localRotation = original.localRotation * Quaternion.AngleAxis(rotAngle, rotAxis);
-            }
-            else
-            {
-                child.localRotation = original.localRotation;
-            }
-
-            // 保持原始缩放
-            child.localScale = original.localScale;
-        }
-    }
-
-    /// <summary>
-    /// 设置弧形强度（带过渡）
-    /// </summary>
-    public void SetCurveStrength(float strength, bool animate = false)
-    {
-        curveStrength = Mathf.Clamp(strength, 0f, 2f);
-        targetCurveStrength = curveStrength;
+        float radian = angle * Mathf.Deg2Rad;
         
-        if (animate && transitionTime > 0)
-        {
-            transitionTimer = transitionTime;
-        }
-        else
-        {
-            currentCurveStrength = curveStrength;
-            ApplyCurve();
-        }
+        // 弧形位置
+        Vector3 basePos = new Vector3(
+            Mathf.Sin(radian) * radius,
+            heightOffset,
+            Mathf.Cos(radian) * radius - radius
+        );
+
+        panel.localPosition = basePos + offset;
+        panel.localRotation = Quaternion.Euler(0, -angle, 0);
+        panel.localScale = Vector3.one * 0.001f; // Canvas在World Space中通常需要缩小
     }
 
-    /// <summary>
-    /// 临时切换为平面/弧形
-    /// </summary>
-    public void ToggleCurve(bool curved, bool animate = false)
+    void UpdateFollow()
     {
-        SetCurveStrength(curved ? 0.5f : 0f, animate);
-    }
+        // 平滑跟随头部
+        Vector3 targetPos = headTransform.position + headTransform.forward * radius;
+        targetPos.y = headTransform.position.y + heightOffset;
+        
+        Quaternion targetRot = Quaternion.Euler(0, headTransform.eulerAngles.y, 0);
 
-    /// <summary>
-    /// 重置为原始平面布局
-    /// </summary>
-    public void ResetToFlat()
-    {
-        currentCurveStrength = 0f;
-        ApplyCurve();
-    }
-
-    /// <summary>
-    /// 完全恢复原始状态
-    /// </summary>
-    public void RestoreOriginal()
-    {
-        foreach (var kvp in originalTransforms)
-        {
-            Transform child = kvp.Key;
-            OriginalTransform original = kvp.Value;
-            
-            child.localPosition = original.localPosition;
-            child.localRotation = original.localRotation;
-            child.localScale = original.localScale;
-        }
+        transform.position = Vector3.Lerp(transform.position, targetPos, Time.deltaTime * followSpeed);
+        transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, Time.deltaTime * followSpeed);
     }
 
     void OnDrawGizmosSelected()
     {
-        // 绘制中心点和弧形参考线
-        Gizmos.color = Color.yellow;
-        Vector3 worldCenter = transform.TransformPoint(centerPoint);
-        Gizmos.DrawWireSphere(worldCenter, 0.02f);
-
-        // 绘制弧形参考
-        if (currentCurveStrength > 0)
+        Gizmos.color = Color.cyan;
+        
+        float startAngle = -arcAngle / 2f * Mathf.Deg2Rad;
+        float endAngle = arcAngle / 2f * Mathf.Deg2Rad;
+        int segments = 32;
+        
+        Vector3 prevPos = transform.TransformPoint(new Vector3(
+            Mathf.Sin(startAngle) * radius,
+            heightOffset,
+            Mathf.Cos(startAngle) * radius - radius
+        ));
+        
+        for (int i = 1; i <= segments; i++)
         {
-            Gizmos.color = Color.cyan;
-            float currentRadius = radius / currentCurveStrength;
-            int segments = 32;
-            float arcAngle = 60f * currentCurveStrength; // 显示参考弧形
+            float t = (float)i / segments;
+            float angle = Mathf.Lerp(startAngle, endAngle, t);
             
-            Vector3 prevPos = worldCenter + transform.TransformDirection(
-                curveAxis == CurveAxis.Horizontal 
-                    ? new Vector3(Mathf.Sin(-arcAngle * Mathf.Deg2Rad) * currentRadius, 0, Mathf.Cos(-arcAngle * Mathf.Deg2Rad) * currentRadius - currentRadius)
-                    : new Vector3(0, Mathf.Sin(-arcAngle * Mathf.Deg2Rad) * currentRadius, Mathf.Cos(-arcAngle * Mathf.Deg2Rad) * currentRadius - currentRadius)
-            );
+            Vector3 pos = transform.TransformPoint(new Vector3(
+                Mathf.Sin(angle) * radius,
+                heightOffset,
+                Mathf.Cos(angle) * radius - radius
+            ));
             
-            for (int i = 1; i <= segments; i++)
-            {
-                float t = (float)i / segments;
-                float angle = Mathf.Lerp(-arcAngle, arcAngle, t) * Mathf.Deg2Rad;
-                
-                Vector3 localOffset = curveAxis == CurveAxis.Horizontal
-                    ? new Vector3(Mathf.Sin(angle) * currentRadius, 0, Mathf.Cos(angle) * currentRadius - currentRadius)
-                    : new Vector3(0, Mathf.Sin(angle) * currentRadius, Mathf.Cos(angle) * currentRadius - currentRadius);
-                
-                Vector3 pos = worldCenter + transform.TransformDirection(localOffset);
-                Gizmos.DrawLine(prevPos, pos);
-                prevPos = pos;
-            }
+            Gizmos.DrawLine(prevPos, pos);
+            prevPos = pos;
         }
     }
 }
