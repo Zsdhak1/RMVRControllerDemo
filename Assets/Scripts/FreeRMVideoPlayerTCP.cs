@@ -6,10 +6,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
+using System.Linq;
 
 /// <summary>
-/// HEVC 视频流 UDP 接收器 - 无限制直通模式
-/// 尽可能快地将 UDP 数据转发到 TCP，不人为限制速率
+/// HEVC 视频流 UDP 接收器 - 支持帧重排和原版直通两种模式
+/// 协议格式（大端序）：帧编号(2B) + 包序号(2B) + 帧总大小(4B) + HEVC数据
 /// </summary>
 public class FreeRMVideoPlayerTCP : MonoBehaviour
 {
@@ -18,14 +19,24 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
     public int tcpPort = 3335;
     public int tcpSendBufferSize = 1024 * 1024 * 8;
     
-    [Header("=== Buffer (防内存溢出) ===")]
-    [Tooltip("最大缓冲包数，超过将丢弃最旧数据")]
+    [Header("=== Mode ===")]
+    [Tooltip("启用帧重排模式（解决乱序花屏）。关闭则使用原版直通模式。")]
+    public bool enableFrameReordering = true;
+    
+    [Header("=== Buffer ===")]
     public int maxBufferSize = 500;
+    [Tooltip("帧重排模式：最大缓存帧数")]
+    public int maxFrameBufferSize = 16;
+    [Tooltip("帧重排模式：帧超时时间(秒)")]
+    public float frameTimeoutSeconds = 0.1f;
+    [Tooltip("帧重排模式：包到达间隔阈值(秒)")]
+    public float packetArrivalInterval = 0.02f;
     
     [Header("=== Debug ===")]
     public bool enableDebugLog = true;
     public bool enableFileLogging = true;
 
+    // === Network ===
     private UdpClient _udpClient;
     private TcpListener _tcpListener;
     private TcpClient _tcpClient;
@@ -34,40 +45,60 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
     private bool _isRunning = false;
     private bool _tcpConnected = false;
     
-    // 数据队列
+    // === Queues ===
     private Queue<byte[]> _sendQueue = new Queue<byte[]>();
     private readonly object _queueLock = new object();
     
-    // Stats
+    // === Frame Reordering ===
+    private class FramePacket
+    {
+        public ushort Sequence;
+        public byte[] Data;
+    }
+    
+    private class FrameBuffer
+    {
+        public ushort FrameNumber;
+        public uint TotalSize;
+        public Dictionary<ushort, FramePacket> Packets;
+        public float FirstReceiveTime;
+        public float LastReceiveTime;
+        public int ReceivedSize;
+        public ushort HighestSeq;
+    }
+    
+    private Dictionary<ushort, FrameBuffer> _frameBuffers = new Dictionary<ushort, FrameBuffer>();
+    private readonly object _frameBufferLock = new object();
+    private ushort _lastSentFrameNumber = 0;
+    private bool _hasReceivedFirstFrame = false;
+    
+    // === Stats ===
     private long _totalUdpPackets = 0;
     private long _totalTcpPackets = 0;
     private long _totalBytesSent = 0;
     private long _droppedPackets = 0;
+    private long _reassembledFrames = 0;
     private float _lastLogTime;
-    private int _queueSizeAtLastLog = 0;
     
-    // 用于外部监控的公共属性
+    // === Time ===
+    private float _startupTime = 0f;
+    private long _bytesInLastSecond = 0;
+    private float _rateUpdateTimer = 0f;
+    
+    // === Logging ===
+    private StreamWriter _logWriter;
+    private readonly object _logLock = new object();
+
+    // === Public Properties ===
     public bool isRunning => _isRunning;
     public long probeTotalPacketsReceived => _totalUdpPackets;
     public int currentRateKbps { get; private set; }
     public bool isTcpConnected => _tcpConnected;
     public long totalBytesSent => _totalBytesSent;
     public long droppedPackets => _droppedPackets;
-    public int queueSize 
-    { 
-        get 
-        { 
-            lock (_queueLock) { return _sendQueue.Count; }
-        }
-    }
-    
-    // 速率计算
-    private long _bytesInLastSecond = 0;
-    private float _rateUpdateTimer = 0f;
-    
-    // Logging
-    private StreamWriter _logWriter;
-    private readonly object _logLock = new object();
+    public long reassembledFrames => _reassembledFrames;
+    public int queueSize { get { lock (_queueLock) { return _sendQueue.Count; } } }
+    public int bufferedFrameCount { get { lock (_frameBufferLock) { return _frameBuffers.Count; } } }
 
     void Awake()
     {
@@ -76,8 +107,11 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
     
     void Start()
     {
-        Log("[HEVC] Starting (Unlimited Mode)...");
+        _startupTime = Time.time;
         _isRunning = true;
+        
+        string mode = enableFrameReordering ? "Frame Reordering" : "Direct Pass-through";
+        Log($"[HEVC] Starting - {mode} Mode");
         
         StartTCPServer();
         StartUDPReceiver();
@@ -85,16 +119,15 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
 
     void Update()
     {
-        // 检查TCP状态
-        lock (_tcpLock)
+        lock (_tcpLock) { _tcpConnected = _tcpStream != null && _tcpStream.CanWrite; }
+        
+        if (enableFrameReordering)
         {
-            _tcpConnected = _tcpStream != null && _tcpStream.CanWrite;
+            ProcessFrames();
         }
         
-        // 发送所有 queued 数据
-        SendAllQueuedData();
+        SendQueuedData();
         
-        // 计算实时速率 (Kbps)
         _rateUpdateTimer += Time.deltaTime;
         if (_rateUpdateTimer >= 1.0f)
         {
@@ -103,7 +136,6 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
             _rateUpdateTimer = 0f;
         }
         
-        // 统计日志
         if (Time.time - _lastLogTime >= 3.0f)
         {
             _lastLogTime = Time.time;
@@ -122,7 +154,7 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
             string logFilePath = Path.Combine(logDir, $"HEVC_{timestamp}.log");
             _logWriter = new StreamWriter(logFilePath, false, Encoding.UTF8);
             _logWriter.AutoFlush = true;
-            Log($"[HEVC] Log: {logFilePath}");
+            Log($"[Log] {logFilePath}");
         }
         catch { enableFileLogging = false; }
     }
@@ -138,18 +170,29 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
         }
     }
 
-    #region TCP
+    // === Byte Order Helpers ===
+    private ushort ReadUInt16BE(byte[] data, int offset)
+    {
+        return (ushort)((data[offset] << 8) | data[offset + 1]);
+    }
+    
+    private uint ReadUInt32BE(byte[] data, int offset)
+    {
+        return ((uint)data[offset] << 24) | ((uint)data[offset + 1] << 16) | 
+               ((uint)data[offset + 2] << 8) | data[offset + 3];
+    }
 
+    // === TCP ===
     private void StartTCPServer()
     {
         try
         {
             _tcpListener = new TcpListener(IPAddress.Any, tcpPort);
             _tcpListener.Start();
-            Log($"[TCP] Server on port {tcpPort}");
+            Log($"[TCP] Port {tcpPort}");
             _ = AcceptLoop();
         }
-        catch (Exception ex) { Log($"[TCP] Failed: {ex.Message}"); }
+        catch (Exception ex) { Log($"[TCP Error] {ex.Message}"); }
     }
 
     private async Task AcceptLoop()
@@ -164,20 +207,17 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
                     if (_tcpClient != null) try { _tcpClient.Close(); } catch { }
                     _tcpClient = client;
                     _tcpClient.SendBufferSize = tcpSendBufferSize;
-                    _tcpClient.NoDelay = true; // 禁用Nagle，降低延迟
+                    _tcpClient.NoDelay = true;
                     _tcpStream = _tcpClient.GetStream();
                     _tcpConnected = true;
                 }
-                Log("[TCP] Client connected");
+                Log("[TCP] Connected");
             }
             catch { await Task.Delay(1000); }
         }
     }
 
-    #endregion
-
-    #region UDP
-
+    // === UDP ===
     private void StartUDPReceiver()
     {
         try
@@ -187,9 +227,9 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
             _udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, udpPort));
             _udpClient.Client.ReceiveBufferSize = 1024 * 1024 * 16;
             _udpClient.BeginReceive(UDPCallback, null);
-            Log($"[UDP] Receiver on port {udpPort}");
+            Log($"[UDP] Port {udpPort}");
         }
-        catch (Exception e) { Log($"[UDP] Failed: {e.Message}"); }
+        catch (Exception e) { Log($"[UDP Error] {e.Message}"); }
     }
 
     private void UDPCallback(IAsyncResult res)
@@ -197,9 +237,10 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
         if (!_isRunning || _udpClient == null) return;
         
         byte[] data = null;
+        IPEndPoint ep = null;
         try
         {
-            IPEndPoint ep = new IPEndPoint(IPAddress.Any, 0);
+            ep = new IPEndPoint(IPAddress.Any, 0);
             data = _udpClient.EndReceive(res, ref ep);
         }
         catch { }
@@ -207,22 +248,36 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
         try { if (_isRunning && _udpClient != null) _udpClient.BeginReceive(new AsyncCallback(UDPCallback), null); }
         catch { }
         
-        if (data != null && data.Length > 8)
+        if (data == null || data.Length <= 8) return;
+        
+        _totalUdpPackets++;
+        _bytesInLastSecond += data.Length;
+        
+        // 解析头部
+        ushort frameNumber = ReadUInt16BE(data, 0);
+        ushort packetSeq = ReadUInt16BE(data, 2);
+        uint frameTotalSize = ReadUInt32BE(data, 4);
+        
+        int payloadLen = data.Length - 8;
+        
+        if (enableFrameReordering)
         {
-            _totalUdpPackets++;
-            _bytesInLastSecond += data.Length; // 统计接收速率
-            
-            // 去掉8字节头
-            int len = data.Length - 8;
-            byte[] payload = new byte[len];
-            Buffer.BlockCopy(data, 8, payload, 0, len);
+            // 帧重排模式：提取payload，按帧重组
+            byte[] payload = new byte[payloadLen];
+            Buffer.BlockCopy(data, 8, payload, 0, payloadLen);
+            AddToFrameBuffer(frameNumber, packetSeq, frameTotalSize, payload, payloadLen);
+        }
+        else
+        {
+            // 原版直通模式：直接去掉8字节头，加入队列
+            byte[] payload = new byte[payloadLen];
+            Buffer.BlockCopy(data, 8, payload, 0, payloadLen);
             
             lock (_queueLock)
             {
-                // 如果队列满，丢弃最旧的（保持最新数据）
                 if (_sendQueue.Count >= maxBufferSize)
                 {
-                    // 只丢弃一半，避免频繁丢弃
+                    // 丢弃一半
                     int toDrop = maxBufferSize / 2;
                     for (int i = 0; i < toDrop; i++)
                     {
@@ -232,22 +287,163 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
                             _droppedPackets++;
                         }
                     }
-                    Log($"[Buffer] Dropped {toDrop} old packets, queue was full");
+                    if (enableDebugLog)
+                        Log($"[Buffer] Dropped {toDrop} old packets");
                 }
                 _sendQueue.Enqueue(payload);
             }
         }
+        
+        // 每100个包打印一次
+        if (_totalUdpPackets % 100 == 0 && enableDebugLog)
+        {
+            Log($"[UDP] Packet #{_totalUdpPackets}: Frame={frameNumber}, Seq={packetSeq}, TotalSize={frameTotalSize}, Payload={payloadLen}");
+        }
+    }
+    
+    // === Frame Reordering ===
+    private void AddToFrameBuffer(ushort frameNumber, ushort packetSeq, uint totalSize, byte[] data, int dataLen)
+    {
+        lock (_frameBufferLock)
+        {
+            float currentTime = Time.time - _startupTime;
+            
+            if (!_hasReceivedFirstFrame)
+            {
+                _hasReceivedFirstFrame = true;
+                _lastSentFrameNumber = (ushort)((frameNumber - 1) & 0xFFFF);
+                Log($"[First] Frame #{frameNumber}");
+            }
+            
+            if (!_frameBuffers.TryGetValue(frameNumber, out FrameBuffer frame))
+            {
+                // 缓冲区满，发送最旧的
+                if (_frameBuffers.Count >= maxFrameBufferSize)
+                {
+                    var oldest = _frameBuffers.OrderBy(f => f.Key).FirstOrDefault();
+                    if (oldest.Value != null)
+                    {
+                        TrySendFrame(oldest.Value);
+                        _frameBuffers.Remove(oldest.Key);
+                    }
+                }
+                
+                frame = new FrameBuffer
+                {
+                    FrameNumber = frameNumber,
+                    TotalSize = totalSize,
+                    Packets = new Dictionary<ushort, FramePacket>(),
+                    FirstReceiveTime = currentTime,
+                    LastReceiveTime = currentTime,
+                    ReceivedSize = 0,
+                    HighestSeq = 0
+                };
+                _frameBuffers.Add(frameNumber, frame);
+            }
+            
+            if (!frame.Packets.ContainsKey(packetSeq))
+            {
+                frame.Packets[packetSeq] = new FramePacket
+                {
+                    Sequence = packetSeq,
+                    Data = data
+                };
+                frame.ReceivedSize += dataLen;
+                frame.LastReceiveTime = currentTime;
+                if (packetSeq > frame.HighestSeq) frame.HighestSeq = packetSeq;
+            }
+        }
     }
 
-    #endregion
+    private void ProcessFrames()
+    {
+        float now = Time.time - _startupTime;
+        
+        lock (_frameBufferLock)
+        {
+            if (_frameBuffers.Count == 0) return;
+            
+            var toRemove = new List<ushort>();
+            var sortedFrames = _frameBuffers.OrderBy(f => (f.Key - _lastSentFrameNumber) & 0xFFFF).ToList();
+            
+            foreach (var kvp in sortedFrames)
+            {
+                ushort frameNum = kvp.Key;
+                FrameBuffer frame = kvp.Value;
+                
+                float age = now - frame.FirstReceiveTime;
+                float idle = now - frame.LastReceiveTime;
+                
+                bool send = false;
+                
+                if (frame.TotalSize > 0 && frame.ReceivedSize >= frame.TotalSize)
+                    send = true;
+                else if (idle > packetArrivalInterval && frame.Packets.Count > 0)
+                    send = true;
+                else if (age > frameTimeoutSeconds)
+                    send = true;
+                
+                if (send)
+                {
+                    TrySendFrame(frame);
+                    toRemove.Add(frameNum);
+                    _lastSentFrameNumber = frameNum;
+                }
+            }
+            
+            foreach (var num in toRemove)
+            {
+                _frameBuffers.Remove(num);
+            }
+        }
+    }
+    
+    private void TrySendFrame(FrameBuffer frame)
+    {
+        if (frame.Packets.Count == 0) return;
+        
+        var sorted = frame.Packets.OrderBy(p => p.Key).ToList();
+        int totalSize = sorted.Sum(p => p.Value.Data.Length);
+        
+        byte[] frameData = new byte[totalSize];
+        int offset = 0;
+        foreach (var kvp in sorted)
+        {
+            var pkt = kvp.Value;
+            Buffer.BlockCopy(pkt.Data, 0, frameData, offset, pkt.Data.Length);
+            offset += pkt.Data.Length;
+        }
+        
+        lock (_queueLock)
+        {
+            if (_sendQueue.Count >= maxBufferSize)
+            {
+                int drop = maxBufferSize / 2;
+                for (int i = 0; i < drop; i++)
+                {
+                    if (_sendQueue.Count > 0) 
+                    {
+                        _sendQueue.Dequeue();
+                        _droppedPackets++;
+                    }
+                }
+            }
+            _sendQueue.Enqueue(frameData);
+            _reassembledFrames++;
+        }
+        
+        if (enableDebugLog && (frame.FrameNumber % 60 == 0 || frame.FrameNumber < 5))
+        {
+            float pct = frame.TotalSize > 0 ? (frame.ReceivedSize * 100f / frame.TotalSize) : 100f;
+            Log($"[Frame] #{frame.FrameNumber}: {sorted.Count} pkts, {totalSize} bytes, {pct:F0}%");
+        }
+    }
 
-    #region Send
-
-    private void SendAllQueuedData()
+    // === Send ===
+    private void SendQueuedData()
     {
         if (!_tcpConnected)
         {
-            // TCP断开时清空队列
             lock (_queueLock)
             {
                 while (_sendQueue.Count > 0)
@@ -259,9 +455,6 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
             return;
         }
 
-        // 一次性发送所有 queued 数据，不限制数量
-        int sentThisFrame = 0;
-        
         lock (_queueLock)
         {
             lock (_tcpLock)
@@ -272,7 +465,6 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
                     return;
                 }
                 
-                // 发送队列中所有数据
                 while (_sendQueue.Count > 0)
                 {
                     byte[] data = _sendQueue.Dequeue();
@@ -282,11 +474,10 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
                         _totalBytesSent += data.Length;
                         _bytesInLastSecond += data.Length;
                         _totalTcpPackets++;
-                        sentThisFrame++;
                     }
                     catch (Exception ex)
                     {
-                        Log($"[Send Error] {ex.Message}");
+                        Log($"[TCP Error] {ex.Message}");
                         _tcpConnected = false;
                         _tcpStream = null;
                         _tcpClient = null;
@@ -295,27 +486,21 @@ public class FreeRMVideoPlayerTCP : MonoBehaviour
                 }
             }
         }
-        
-        // 如果发送了数据，记录一下
-        if (sentThisFrame > 0 && sentThisFrame > 100)
-        {
-            Log($"[Send] Sent {sentThisFrame} packets this frame");
-        }
     }
 
-    #endregion
-
+    // === Stats ===
     private void PrintStats()
     {
-        int queueSize = 0;
+        int queueSize, frameBufCount;
         lock (_queueLock) { queueSize = _sendQueue.Count; }
+        lock (_frameBufferLock) { frameBufCount = _frameBuffers.Count; }
         
         float dropRate = _totalUdpPackets > 0 ? (float)_droppedPackets / _totalUdpPackets * 100 : 0;
+        string mode = enableFrameReordering ? "REORDER" : "DIRECT";
         
-        Log($"[Stats] TCP:{(_tcpConnected ? "OK" : "Wait")} | " +
-            $"UDP:{_totalUdpPackets} | TCP:{_totalTcpPackets} | " +
-            $"MB:{_totalBytesSent / 1024.0 / 1024.0:F1} | " +
-            $"Drop:{_droppedPackets}({dropRate:F1}%) | Queue:{queueSize}");
+        Log($"[Stats] {mode} | TCP:{(_tcpConnected ? "OK" : "Wait")} | UDP:{_totalUdpPackets} | " +
+            $"Frames:{_reassembledFrames} | MB:{_totalBytesSent / 1024.0 / 1024.0:F1} | " +
+            $"Drop:{_droppedPackets}({dropRate:F1}%) | Queue:{queueSize} | FBuf:{frameBufCount}");
     }
 
     void OnDestroy()

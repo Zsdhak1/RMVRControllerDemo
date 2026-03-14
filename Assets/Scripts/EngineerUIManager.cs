@@ -159,7 +159,7 @@ public class EngineerUIManager : MonoBehaviour
         bool isDead = data.IsPendingRespawn; // 或者 data.MyRobot.isDead
         bool canFree = data.CanFreeRespawn;
         bool canPay = data.CanPayForRespawn;
-        int payCost = data.GoldCostForRespawn;
+        int payCost = (int)data.GoldCostForRespawn;
 
         string status = "正常";
         if (isDead) status = "阵亡待复活";
@@ -299,7 +299,7 @@ public class EngineerUIManager : MonoBehaviour
         // 持续渲染倒计时 (如果有的话)
         if (coreStatus == 2 || coreStatus == 4 || coreStatus == 6)
         {
-            if (assemblyTitle && data.AssemblyRemainTime > 0)
+            if (assemblyTitle && data.AssemblyRemainTimeAll > 0)
             {
                 // 可以加个时间后缀
                 // assemblyTitle.text += $" ({data.AssemblyRemainTime}s)";
