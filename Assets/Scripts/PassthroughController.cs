@@ -30,11 +30,6 @@ public class PassthroughController : MonoBehaviour
             ToggleMode();
         }
         
-        // 键盘空格调试
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            ToggleMode();
-        }
     }
 
     void ToggleMode()

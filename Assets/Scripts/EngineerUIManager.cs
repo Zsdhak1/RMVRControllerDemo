@@ -166,28 +166,22 @@ public class EngineerUIManager : MonoBehaviour
         else if (data.CurrentStage == 1) status = "准备";
         if (stateText) stateText.text = status;
 
-        // 如果机器人在场上没死，强行锁死两个按钮避免误触被判罚
-        if (!isDead)
+        // 复活按钮始终可用（移除所有限制）
+        if (btnRevive) btnRevive.interactable = true;
+        if (btnRemoteHeal) btnRemoteHeal.interactable = true;
+        
+        // 仅显示状态文本（不影响按钮可用性）
+        if (txtReviveCost)
         {
-            if (btnRevive) btnRevive.interactable = false;
-            if (btnRemoteHeal) btnRemoteHeal.interactable = false;
-            
-            if (txtReviveCost) txtReviveCost.text = "处于存活状态";
-        }
-        else
-        {
-            // 战亡状态：
-            // btnRevive (原确认复活) => 只有读条完成 (CanFreeRespawn) 才能点
-            if (btnRevive) btnRevive.interactable = canFree;
-
-            // btnRemoteHeal (买活) => 允许买活 且 战队金额 >= 动态攀升的金币数 才能点
-            bool hasEnoughGold = data.MyGold >= payCost;
-            if (btnRemoteHeal) btnRemoteHeal.interactable = canPay && hasEnoughGold;
-
-            if (txtReviveCost)
+            if (!isDead)
             {
-                txtReviveCost.color = hasEnoughGold ? Color.yellow : Color.red;
-                txtReviveCost.text = canPay ? $"买活金币: {payCost}G" : "规则禁用";
+                txtReviveCost.text = "处于存活状态";
+                txtReviveCost.color = Color.white;
+            }
+            else
+            {
+                txtReviveCost.color = data.MyGold >= payCost ? Color.yellow : Color.red;
+                txtReviveCost.text = $"买活金币: {payCost}G";
             }
         }
     }
@@ -238,62 +232,36 @@ public class EngineerUIManager : MonoBehaviour
                 case 1: // 1：未进入装配状态 (完全初始状态)
                     if (assemblyTitle) assemblyTitle.text = "选择要装配的难度等级";
                     if (assemblyDescText) assemblyDescText.text = "准备就绪";
-                    
-                    // 仅解锁小于等于当前上限的难度按钮
-                    for (int i = 0; i < difficultyBtns.Length; i++)
-                    {
-                        difficultyBtns[i].interactable = (i + 1 <= maxDiff);
-                    }
-                    
-                    if (confirmBtn) confirmBtn.interactable = false; // 未完成物理动作，锁死确认
-                    if (cancelBtn) cancelBtn.interactable = false;
                     break;
 
                 case 2: // 2：已选择装配难度，科技核心移动中 (推杆伸出)
                     if (assemblyTitle) assemblyTitle.text = "装配台对接中...";
                     if (assemblyDescText) assemblyDescText.text = "推杆正在伸出，请勿触碰";
-
-                    LockAllDifficultyButtons(); // 锁死难度选区
-                    if (confirmBtn) confirmBtn.interactable = false; // 锁死确认
-                    if (cancelBtn) cancelBtn.interactable = true;    // 此时允许后悔
                     break;
 
                 case 3: // 3：科技核心移动完成，可进行首个装配步骤
                     if (assemblyTitle) assemblyTitle.text = "请进行阶段 1";
                     if (assemblyDescText) assemblyDescText.text = "<color=green>物理推杆已就位！请插入能量块</color>";
-
-                    LockAllDifficultyButtons();
-                    if (confirmBtn) confirmBtn.interactable = false; // 依然锁死，防止骗分
-                    if (cancelBtn) cancelBtn.interactable = true;
                     break;
 
                 case 4: // 4：上一个装配步骤已完成，可进行下一个装配步骤
                     if (assemblyTitle) assemblyTitle.text = "请进行下一阶段";
                     if (assemblyDescText) assemblyDescText.text = "底层已反馈触碰，请继续执行指定动作";
-
-                    LockAllDifficultyButtons();
-                    if (confirmBtn) confirmBtn.interactable = false; // 锁死
-                    if (cancelBtn) cancelBtn.interactable = true;
                     break;
 
-                case 5: // 5：装配步骤已全部完成！唯一的交互窗口！
+                case 5: // 5：装配步骤已全部完成！
                     if (assemblyTitle) assemblyTitle.text = "装配物理动作全完成！";
-                    if (assemblyDescText) assemblyDescText.text = "<color=cyan>所有步骤达标！请立刻按下[确认装配]</color>";
-
-                    LockAllDifficultyButtons();
-                    if (confirmBtn) confirmBtn.interactable = true;  // ★ 只有在状态5，确认装配才允许点击
-                    if (cancelBtn) cancelBtn.interactable = true;
+                    if (assemblyDescText) assemblyDescText.text = "<color=cyan>所有步骤达标！请按下[确认装配]</color>";
                     break;
 
                 case 6: // 6：已确认装配，科技核心移动中 (回收流程)
                     if (assemblyTitle) assemblyTitle.text = "资源提取中";
-                    if (assemblyDescText) assemblyDescText.text = "<color=yellow>操作已锁定，平台回收中...</color>";
-
-                    LockAllDifficultyButtons();
-                    if (confirmBtn) confirmBtn.interactable = false; // 锁死一切，静候服务器回调至状态1
-                    if (cancelBtn) cancelBtn.interactable = false;
+                    if (assemblyDescText) assemblyDescText.text = "<color=yellow>平台回收中...</color>";
                     break;
             }
+            
+            // 所有按钮始终可用（移除限制）
+            UnlockAllButtons();
         }
         
         // 持续渲染倒计时 (如果有的话)
@@ -307,12 +275,16 @@ public class EngineerUIManager : MonoBehaviour
         }
     }
 
-    private void LockAllDifficultyButtons()
+    private void UnlockAllButtons()
     {
+        // 难度按钮始终可用
         foreach (var btn in difficultyBtns)
         {
-            if (btn != null) btn.interactable = false;
+            if (btn != null) btn.interactable = true;
         }
+        // 确认和取消按钮也始终可用
+        if (confirmBtn) confirmBtn.interactable = true;
+        if (cancelBtn) cancelBtn.interactable = true;
     }
 
     // === 交互函数 ===
@@ -328,13 +300,8 @@ public class EngineerUIManager : MonoBehaviour
 
     void SendAssembly(uint op)
     {
-        // Op = 1 此时应该只代表 确认兑换
-        // Op = 2 则永远是 取消
-        if (op == 1 && data.TechCoreStatus != 5)
-        {
-            ShowNotification("未完成装配！不能确认！");
-            return;
-        }
+        // 移除状态检查限制，按钮始终可点击
+        // 注：服务器端仍会验证操作合法性
         
         data.SendAssemblyCommand(op, selectedDifficulty);
         ShowNotification(op == 1 ? "发送: 确认装配" : "发送: 取消装配");

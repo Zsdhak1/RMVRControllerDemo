@@ -12,9 +12,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 05d394ae2a81edd4cbc3c51917e766e3, type: 3}
   m_Name: OculusProjectConfig
   m_EditorClassIdentifier: 
-  targetDeviceTypes: 02000000030000000400000005000000
+  targetDeviceTypes: 020000000400000005000000
   allowOptional3DofHeadTracking: 0
-  handTrackingSupport: 1
+  handTrackingSupport: 2
   handTrackingFrequency: 2
   handTrackingVersion: 2
   anchorSupport: 1
@@ -41,9 +41,9 @@ MonoBehaviour:
   requiresSystemKeyboard: 1
   experimentalFeaturesEnabled: 0
   insightPassthroughEnabled: 0
-  _insightPassthroughSupport: 1
-  isPassthroughCameraAccessEnabled: 0
-  _processorFavor: 0
+  _insightPassthroughSupport: 2
+  isPassthroughCameraAccessEnabled: 1
+  _processorFavor: 1
   systemSplashScreen: {fileID: 2800000, guid: aa40ec9e9b74a9b489f407e74156d583, type: 3}
   systemSplashScreenType: 0
   _systemLoadingScreenBackground: 1

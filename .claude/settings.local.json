@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developer.oculus.com)",
+      "WebFetch(domain:developers.meta.com)",
+      "WebSearch",
+      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.62f3/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe\" logcat -d -s VrApi)",
+      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.62f3/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe\" logcat -d -s Unity)",
+      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.62f1/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe\" logcat -d)",
+      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.62f3/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe\" logcat -d)",
+      "Bash(xargs grep:*)",
+      "Bash(find G:/UnityProjects/RMVRControllerDemo/Assets/Settings -name *.asset -type f)",
+      "Bash(find G:/UnityProjects/RMVRControllerDemo/Assets -name *.fbx -o -name *.FBX -o -name *.obj -o -name *.OBJ)",
+      "Bash(where blender:*)",
+      "Read(//c/Program Files/**)",
+      "Bash(reg query:*)",
+      "Read(//c/Users/**)",
+      "Bash(cmd /c \"where blender\")",
+      "Bash(cmd /c 'dir \"\"C:\\\\Program Files\\\\Blender Foundation\"\" /b')",
+      "Bash(cmd /c 'dir \"\"%APPDATA%\\\\Blender Foundation\"\" /b')",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Users\\\\hhh20' -Filter 'blender.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName\" 2>&1)",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\' -Filter 'blender.exe' -Recurse -ErrorAction SilentlyContinue -Depth 6 | Select-Object FullName; Get-ChildItem 'D:\\\\' -Filter 'blender.exe' -Recurse -ErrorAction SilentlyContinue -Depth 6 | Select-Object FullName\" 2>&1)",
+      "Bash(\"/c/Program Files/WindowsApps/blenderfoundation.blender_5.0.1.0_x64__ppwjx1n5r4v9t/Blender/blender.exe\" --version)",
+      "Bash(powershell -Command \"Get-AppxPackage -Name '*blender*' | Select-Object Name,InstallLocation,PackageFamilyName\" 2>&1)",
+      "Bash(mkdir -p \"G:/UnityProjects/RMVRControllerDemo/Assets/Models/Backup_Original\")",
+      "Bash(cp \"G:/UnityProjects/RMVRControllerDemo/Assets/Models/\"*.blend \"G:/UnityProjects/RMVRControllerDemo/Assets/Models/Backup_Original/\")",
+      "Bash(BLENDER=\"/c/Users/hhh20/AppData/Local/Microsoft/WindowsApps/blender-launcher.exe\" \"$BLENDER\" --background --python \"C:/Users/hhh20/AppData/Local/Temp/decimate_models.py\")"
+    ]
+  }
+}
