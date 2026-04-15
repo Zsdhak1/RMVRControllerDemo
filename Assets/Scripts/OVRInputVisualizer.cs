@@ -47,8 +47,14 @@ public class OVRInputVisualizer : MonoBehaviour
         s.value = 0f;
     }
 
+    [Header("临时禁用开关")]
+    [Tooltip("禁用手柄输入可视化更新")]
+    public bool disableVisualizer = true;
+
     void Update()
     {
+        if (disableVisualizer) return;
+
         // 1. 读取摇杆二维向量 (Thumbstick)
         Vector2 lStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
         Vector2 rStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch);

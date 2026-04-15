@@ -1,12 +1,14 @@
 using UnityEngine;
 using TMPro;           // 引用 TextMeshPro
 using UnityEngine.UI;  // 引用标准 UI 组件 (Button)
+using System.Collections.Generic; // List<T>
 
 public class LoginUI : MonoBehaviour
 {
     [Header("UI 组件引用 (请在 Inspector 拖拽赋值)")]
     public TMP_InputField inputIP;    // IP 输入框
     public TMP_InputField inputPort;  // 端口输入框
+    public TMP_Dropdown dropdownRobotID; // 机器人ID下拉框
     public Button btnConnect;         // 连接按钮
     public TextMeshProUGUI statusText;// 状态提示文字
 
@@ -20,6 +22,24 @@ public class LoginUI : MonoBehaviour
         GlobalConfig.LoadConfig();
         inputIP.text = GlobalConfig.CurrentIP;
         inputPort.text = GlobalConfig.CurrentPort.ToString();
+
+        // 初始化机器人ID下拉框选项
+        if (dropdownRobotID != null)
+        {
+            dropdownRobotID.ClearOptions();
+            var options = new List<TMP_Dropdown.OptionData>();
+            for (int i = 1; i <= 10; i++)
+                options.Add(new TMP_Dropdown.OptionData($"红方 {i}"));
+            for (int i = 101; i <= 110; i++)
+                options.Add(new TMP_Dropdown.OptionData($"蓝方 {i}"));
+            dropdownRobotID.AddOptions(options);
+
+            // 恢复上次保存的选项
+            string savedId = GlobalConfig.CurrentRobotID;
+            int savedIndex = options.FindIndex(o => o.text.Contains(savedId));
+            dropdownRobotID.value = savedIndex >= 0 ? savedIndex : 0;
+            dropdownRobotID.RefreshShownValue();
+        }
 
         // 2. 绑定按钮点击事件
         btnConnect.onClick.AddListener(OnConnectClicked);
@@ -48,8 +68,18 @@ public class LoginUI : MonoBehaviour
     // 当点击按钮时触发
     void OnConnectClicked()
     {
+        // 提取选中的机器人ID
+        string robotId = "1";
+        if (dropdownRobotID != null && dropdownRobotID.options.Count > 0)
+        {
+            string selectedText = dropdownRobotID.options[dropdownRobotID.value].text;
+            // 从 "红方 1" 或 "蓝方 101" 中提取数字
+            var parts = selectedText.Split(' ');
+            if (parts.Length > 1) robotId = parts[parts.Length - 1];
+        }
+
         // 1. 保存当前输入到全局配置 (硬盘)
-        GlobalConfig.SaveConfig(inputIP.text, inputPort.text);
+        GlobalConfig.SaveConfig(inputIP.text, inputPort.text, robotId);
 
         // 2. 更新 UI 状态
         statusText.text = "正在连接服务器...";

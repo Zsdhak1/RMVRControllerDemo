@@ -714,21 +714,25 @@ public class DataManager : MonoBehaviour
 
         var factory = new MqttFactory();
         mqttClient = factory.CreateMqttClient();
-        
-        string uniqueID = "EngineerVR_" + System.Guid.NewGuid().ToString().Substring(0, 8);
+
+        string clientId = GlobalConfig.CurrentRobotID;
+        if (int.TryParse(clientId, out int parsedRobotId))
+        {
+            MyID = parsedRobotId;
+        }
 
         var options = new MqttClientOptionsBuilder()
             .WithTcpServer(ip, port)
-            .WithClientId(uniqueID)
+            .WithClientId(clientId)
             .WithCleanSession(true)
             .WithTimeout(TimeSpan.FromSeconds(5))
             .Build();
 
         mqttClient.ConnectedAsync += async e =>
         {
-            string msg = $"<color=green> Connected to {ip}:{port}</color>";
+            string msg = $"<color=green> Connected to {ip}:{port} as Robot {clientId}</color>";
             Debug.Log(msg);
-            _context.Post(_ => OnDebugLog?.Invoke(msg), null); 
+            _context.Post(_ => OnDebugLog?.Invoke(msg), null);
             await SubscribeAll();
             _context.Post(_ => OnConnectSuccess?.Invoke(), null);
         };

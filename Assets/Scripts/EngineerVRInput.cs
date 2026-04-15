@@ -67,10 +67,16 @@ public class EngineerVRInput : MonoBehaviour
         sendInterval = 1.0f / sendRate;
     }
 
+    [Header("临时禁用开关")]
+    [Tooltip("禁用手柄输入功能")]
+    public bool disableControllerInput = true;
+
     void Update()
     {
+        if (disableControllerInput) return;
+
         HandleMenuToggle();
-        
+
         // 1. 计算鼠标位移增量
         CalculateMouseDelta();
 

@@ -11,6 +11,10 @@ public class DirectGrabController : MonoBehaviour
 
     private bool isGrabbed = false;
 
+    [Header("行为开关")]
+    [Tooltip("松开抓取后是否将把手吸附回机械臂腕部")]
+    public bool snapBackOnRelease = false;
+
     void Start()
     {
         // 监听 Meta SDK 的事件
@@ -22,14 +26,20 @@ public class DirectGrabController : MonoBehaviour
         grabbable.WhenPointerEventRaised -= HandlePointerEvent;
     }
 
+    [Header("临时禁用开关")]
+    [Tooltip("禁用 VR 手柄抓取功能")]
+    public bool disableGrabInput = true;
+
     // 处理抓取/松开事件
     private void HandlePointerEvent(PointerEvent evt)
     {
+        if (disableGrabInput) return;
+
         if (evt.Type == PointerEventType.Select)
         {
             isGrabbed = true;
             // 告诉 IK 控制器：现在由把手接管控制权
-            ikController.SetTarget(this.transform); 
+            ikController.SetTarget(this.transform);
         }
         else if (evt.Type == PointerEventType.Unselect)
         {
@@ -41,13 +51,10 @@ public class DirectGrabController : MonoBehaviour
 
     void Update()
     {
-        // 如果没被抓取，把手要时刻跟随腕部中心(J6)
-        // 这样你下次伸手时，把手就在正确的位置
-        if (!isGrabbed && robotWrist != null)
+        // 如果没被抓取，且启用了吸附回腕部，则把手跟随腕部中心(J6)
+        if (snapBackOnRelease && !isGrabbed && robotWrist != null)
         {
-            // 把手位置对应 J6 位置
             transform.position = robotWrist.position;
-            // 把手旋转对应 J6 旋转（J4/J5/J6 的组合姿态）
             transform.rotation = robotWrist.rotation;
         }
     }

@@ -53,6 +53,10 @@ public class RobotIKController : MonoBehaviour
     [Header("=== 5. 手动控制设置 ===")]
     public float j7RotationSpeed = 90.0f;
 
+    [Header("临时禁用开关")]
+    [Tooltip("禁用手柄 J7 旋转输入")]
+    public bool disableControllerJ7Input = true;
+
     [Header("=== 6. 关节引用 (必填) ===")]
     public Transform visual_J1;
     public Transform visual_J2;
@@ -316,8 +320,11 @@ public class RobotIKController : MonoBehaviour
     void Update()
     {
         // 1. 处理 J7 手动旋转 (手柄摇杆)
-        float joystickY = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch).y;
-        targetIKAngles[6] += joystickY * j7RotationSpeed * Time.deltaTime;
+        if (!disableControllerJ7Input)
+        {
+            float joystickY = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch).y;
+            targetIKAngles[6] += joystickY * j7RotationSpeed * Time.deltaTime;
+        }
 
         // 2. IK 解算逻辑
         if (isTracking && activeTarget != null)

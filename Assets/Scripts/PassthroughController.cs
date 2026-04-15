@@ -22,14 +22,20 @@ public class PassthroughController : MonoBehaviour
         SetMRMode(true);
     }
 
+    [Header("临时禁用开关")]
+    [Tooltip("禁用手柄对透视模式的切换")]
+    public bool disablePassthroughInput = true;
+
     void Update()
     {
+        if (disablePassthroughInput) return;
+
         // 右手 B 键切换
         if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch))
         {
             ToggleMode();
         }
-        
+
     }
 
     void ToggleMode()

@@ -29,8 +29,14 @@ public class VisorController : MonoBehaviour
         }
     }
 
+    [Header("临时禁用开关")]
+    [Tooltip("禁用手柄对面罩的控制")]
+    public bool disableVisorInput = true;
+
     void Update()
     {
+        if (disableVisorInput) return;
+
         // === 紧急隐藏面罩：按下左手柄或右手柄的摇杆 (Thumbstick Click) 触发 ===
         // 一般来说 LTouch 摇杆按下比较少冲突
         if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch))
