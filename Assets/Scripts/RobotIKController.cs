@@ -90,6 +90,12 @@ public class RobotIKController : MonoBehaviour
     [Tooltip("PositionOnly 模式下，J4-J7 固定为此姿态。再次点击退出该模式时恢复初始姿态")]
     public float[] positionOnlyWristAngles = new float[] { 0f, 0f, 0f, 0f };
 
+    [Tooltip("J5 偏好的 home 角度（单位：度），默认 0°。在 7-DOF 腕部冗余解算时作为软约束目标")]
+    public float j5HomeAngle = 0f;
+
+    [Tooltip("J5 home 角度的代价权重。越大则 J5 越积极回到 home 角度。建议 0.5 ~ 2.0")]
+    public float j5HomeWeight = 1.0f;
+
     // --- 内部数据变量 ---
     [HideInInspector] public float[] outAngles = new float[7];
     private float[] targetIKAngles = new float[7];
@@ -783,7 +789,8 @@ public class RobotIKController : MonoBehaviour
                 cost += Mathf.Pow(j5_deg - lastJ5, 2) * 1.5f; // J5 尽量平缓
                 cost += Mathf.Pow(j6_deg - lastJ6, 2) * 1.0f;
                 cost += Mathf.Pow(j7_deg - lastJ7, 2) * 1.0f;
-                
+                cost += Mathf.Pow(j5_deg - j5HomeAngle, 2) * j5HomeWeight; // J5 软 home 偏好
+
                 // 限位惩罚（J4 限制在 -90 到 90）
                 if (j4_deg < -90f || j4_deg > 90f) cost += 10000f;
                 if (jointLimits.Length > 3 && (j5_deg < jointLimits[4].minAngle || j5_deg > jointLimits[4].maxAngle)) cost += 5000f;
