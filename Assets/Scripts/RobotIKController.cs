@@ -47,7 +47,8 @@ public class RobotIKController : MonoBehaviour
     public enum ControlMode
     {
         InverseKinematics,      // 逆运动学模式（默认）
-        DirectAngleMapping      // 直接角度映射模式
+        DirectAngleMapping,     // 直接角度映射模式
+        PositionOnly            // 仅位置模式：只控制 XYZ，J4-J7 固定
     }
 
     [Header("=== 5. 手动控制设置 ===")]
@@ -84,6 +85,10 @@ public class RobotIKController : MonoBehaviour
     public bool resetToInitialPoseOnStart = true;
     [Tooltip("机械臂启动时的初始角度（J1-J7），单位：度")]
     public float[] initialAngles = new float[] { 0f, 45f, -90f, 0f, 0f, 0f, 0f };
+
+    [Header("=== 10. 仅位置模式设置 ===")]
+    [Tooltip("PositionOnly 模式下，J4-J7 固定为此姿态。再次点击退出该模式时恢复初始姿态")]
+    public float[] positionOnlyWristAngles = new float[] { 0f, 0f, 0f, 0f };
 
     // --- 内部数据变量 ---
     [HideInInspector] public float[] outAngles = new float[7];
@@ -287,23 +292,94 @@ public class RobotIKController : MonoBehaviour
         lastJ6Angle = targetIKAngles[5];
         lastJ7Angle = targetIKAngles[6];
         
-        // 如果正在追踪，重新初始化平滑参数
-        if (isTracking && activeTarget != null)
-        {
-            smoothedInputPos = activeTarget.position + activeTarget.TransformDirection(gripOffset);
-            smoothedInputRot = activeTarget.rotation;
-        }
-        
+        // 同步把手到当前姿态，保证后续抓取连续性
+        SyncHandleToCurrentPose();
+
         // 立即应用到视觉模型
         ApplyToVisuals();
-        
+
         Debug.Log($"[RobotIK] 姿态已重置到初始角度: [{string.Join(", ", initialAngles)}]");
     }
-    
+
+    // 【新增】设置自定义姿态
+    public void SetCustomPose(float[] angles)
+    {
+        if (angles == null || angles.Length < 7)
+        {
+            Debug.LogWarning("[RobotIK] 自定义姿态角度数组无效，需要至少7个角度值");
+            return;
+        }
+
+        // 立即设置目标角度
+        for (int i = 0; i < 7; i++)
+        {
+            targetIKAngles[i] = NormalizeAngle(angles[i]);
+            outAngles[i] = targetIKAngles[i];
+        }
+
+        // 清空速度缓存，防止平滑过渡
+        Array.Clear(jointVelocities, 0, 7);
+        currentVelocityPos = Vector3.zero;
+
+        // 重置连续角度追踪
+        lastJ4Angle = targetIKAngles[3];
+        lastJ5Angle = targetIKAngles[4];
+        lastJ6Angle = targetIKAngles[5];
+        lastJ7Angle = targetIKAngles[6];
+
+        // 同步把手到当前姿态，保证后续抓取连续性
+        SyncHandleToCurrentPose();
+
+        // 立即应用到视觉模型
+        ApplyToVisuals();
+
+        Debug.Log($"[RobotIK] 已切换到自定义姿态: [{string.Join(", ", angles)}]");
+    }
+
+    // 【新增】同步把手到当前 outAngles 对应的末端位置和旋转
+    void SyncHandleToCurrentPose()
+    {
+        if (activeTarget == null) return;
+
+        // 临时应用当前角度到视觉模型，利用 Visual 层级做 FK 读取
+        ApplyToVisuals();
+
+        // 取 J6（把手控制点）的世界位置，J7 的世界旋转
+        Vector3 handlePos = visual_J6 != null ? visual_J6.position : (visual_J7 != null ? visual_J7.position : transform.position);
+        Quaternion handleRot = visual_J7 != null ? visual_J7.rotation : (visual_J6 != null ? visual_J6.rotation : transform.rotation);
+
+        // 将把手移动到对应位置（考虑 gripOffset）
+        activeTarget.position = handlePos - handleRot * gripOffset;
+        activeTarget.rotation = handleRot;
+
+        // 同步平滑参数，保证运动连续性
+        smoothedInputPos = handlePos;
+        smoothedInputRot = handleRot;
+        currentVelocityPos = Vector3.zero;
+    }
+
     // 【新增】快速设置特定模式（供 UnityEvent 使用）
     public void SetModeIK() => SetControlMode(ControlMode.InverseKinematics);
     public void SetModeDirect() => SetControlMode(ControlMode.DirectAngleMapping);
     public void ToggleMode() => SetControlMode(controlMode == ControlMode.InverseKinematics ? ControlMode.DirectAngleMapping : ControlMode.InverseKinematics);
+
+    // 【新增】切换仅位置模式（PositionOnly）
+    public void TogglePositionOnlyMode()
+    {
+        if (controlMode == ControlMode.PositionOnly)
+        {
+            // 退出 PositionOnly 模式，恢复初始姿态并回到 IK 模式
+            ResetToInitialPose();
+            SetControlMode(ControlMode.InverseKinematics);
+            Debug.Log("[RobotIK] 已退出仅位置模式，恢复初始姿态并回到 IK 模式");
+        }
+        else
+        {
+            // 进入 PositionOnly 模式
+            SetControlMode(ControlMode.PositionOnly);
+            Debug.Log("[RobotIK] 已进入仅位置模式，J4-J7 固定");
+        }
+    }
     
     // 获取发送给下位机的数据包
     public byte[] GetPacketData()
@@ -348,6 +424,11 @@ public class RobotIKController : MonoBehaviour
             {
                 // 直接角度映射模式：把手位置直接作为J4平台位置，把手旋转直接映射到J4-J6
                 SolveDirectAngleMapping(smoothedInputPos, smoothedInputRot);
+            }
+            else if (controlMode == ControlMode.PositionOnly)
+            {
+                // 仅位置模式：只控制 XYZ，J4-J7 固定
+                SolvePositionOnly(smoothedInputPos);
             }
             else
             {
@@ -547,7 +628,63 @@ public class RobotIKController : MonoBehaviour
         targetIKAngles[5] = j6;
         targetIKAngles[6] = j7;
     }
-    
+
+    // ============================================================================
+    // 【新增】仅位置模式（PositionOnly）
+    // 把手移动只影响 XYZ 位置，J4-J7 固定为预设角度
+    // ============================================================================
+    void SolvePositionOnly(Vector3 targetPos)
+    {
+        float currentJ1 = targetIKAngles[0];
+
+        // 获取固定的 J4-J7 角度
+        float j4 = positionOnlyWristAngles != null && positionOnlyWristAngles.Length > 0 ? positionOnlyWristAngles[0] : 0f;
+        float j5 = positionOnlyWristAngles != null && positionOnlyWristAngles.Length > 1 ? positionOnlyWristAngles[1] : 0f;
+        float j6 = positionOnlyWristAngles != null && positionOnlyWristAngles.Length > 2 ? positionOnlyWristAngles[2] : 0f;
+        float j7 = positionOnlyWristAngles != null && positionOnlyWristAngles.Length > 3 ? positionOnlyWristAngles[3] : 0f;
+
+        // 步骤1：计算腕部偏移（基于固定 J4-J6）
+        Vector3 wristOffset = CalculateWristOffsetAnalytical(j4, j5, j6);
+        Vector3 wristOffsetWorld = transform.TransformDirection(wristOffset);
+
+        // 步骤2：反推 J4 平台目标位置
+        Vector3 platformTarget = targetPos - wristOffsetWorld;
+
+        // 步骤3：考虑 J4_Drop_Offset，转换为 J3 尖端目标
+        Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
+
+        // 步骤4：解算 J1
+        Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
+        float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
+
+        float targetJ1 = currentJ1;
+        if (flatDist > j1DeadZoneRadius)
+        {
+            float rawJ1 = Mathf.Atan2(localTarget.x, localTarget.z) * Mathf.Rad2Deg;
+            float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
+            targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+        }
+        // 死区内保持 currentJ1 不变
+
+        targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+        targetIKAngles[0] = targetJ1;
+
+        // 步骤5：解算 J2/J3
+        SolveArmPosition(localTarget, targetJ1);
+
+        // 步骤6：固定 J4-J7
+        targetIKAngles[3] = j4;
+        targetIKAngles[4] = j5;
+        targetIKAngles[5] = j6;
+        targetIKAngles[6] = j7;
+
+        // 更新连续角度追踪
+        lastJ4Angle = j4;
+        lastJ5Angle = j5;
+        lastJ6Angle = j6;
+        lastJ7Angle = j7;
+    }
+
     // 【新增】解析旋转分解（针对机械臂轴向优化）
     // 【修复】添加特异点保护，避免把手竖直时 J4 突变
     Vector3 DecomposeWristRotation(Quaternion q)
