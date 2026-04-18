@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__UnityMCP__refresh_unity",
+      "mcp__UnityMCP__read_console",
+      "Bash(ls -la \"G:/UnityProjects/RMVRControllerDemo/\"*.csproj)",
+      "Bash(ls -la \"G:/UnityProjects/RMVRControllerDemo/\"*.sln)",
+      "mcp__UnityMCP__find_gameobjects",
+      "Read(//g/UnityProjects/RMVRControllerDemo/**)",
+      "Bash(ls -la Assets/Scripts_Backup_20260309_154402/)",
+      "mcp__UnityMCP__batch_execute",
+      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.20f1/Editor/Unity.exe\" -quit -batchmode -projectPath \"G:/UnityProjects/RMVRControllerDemo\" -logFile -)"
+    ]
+  }
+}

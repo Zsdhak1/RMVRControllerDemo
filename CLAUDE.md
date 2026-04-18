@@ -71,7 +71,6 @@ Two parallel HUD implementations exist:
 - **`EngineerUIManager`** — Engineer-robot-specific HUD (HP, assembly state machine, team scores, damage flash)
 - **`FullCockpitUI`** — More general cockpit with minimap (28×15m field, robot icons), module status lights
 
-Five curved HUD scripts (`ArcVRHUD`, `CurvedHUD`, `CurvedCanvas`, `CurvedUICanvas`, `CurvedUIMesh`, `CurvedHUDRenderer`) are **experimental prototypes** — not production-finalized.
 
 ### Notable Quirks
 

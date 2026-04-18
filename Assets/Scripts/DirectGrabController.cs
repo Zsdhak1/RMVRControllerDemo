@@ -19,6 +19,12 @@ public class DirectGrabController : MonoBehaviour
     {
         // 监听 Meta SDK 的事件
         grabbable.WhenPointerEventRaised += HandlePointerEvent;
+
+        // 注册把手引用，确保非抓取状态下也能同步姿态
+        if (ikController != null)
+        {
+            ikController.SetVrHandle(this.transform);
+        }
     }
 
     void OnDestroy()

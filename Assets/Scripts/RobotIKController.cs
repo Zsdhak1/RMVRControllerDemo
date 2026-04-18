@@ -102,6 +102,8 @@ public class RobotIKController : MonoBehaviour
     private float[] jointVelocities = new float[7]; // 用于 SmoothDamp 的速度缓存
 
     private Transform activeTarget = null;
+    [Tooltip("VR 把手 Transform，供非抓取状态下同步姿态使用")]
+    public Transform vrHandle;
     private bool isTracking = false;
     private GameObject ghostRoot;
     private Transform ghost_Platform, ghost_J4, ghost_J5, ghost_J6, g_J7;
@@ -125,10 +127,10 @@ public class RobotIKController : MonoBehaviour
         InitializeAnglesFromVisuals();
         
         // 初始化连续角度追踪
-        lastJ4Angle = targetIKAngles[3];
-        lastJ5Angle = targetIKAngles[4];
-        lastJ6Angle = targetIKAngles[5];
-        lastJ7Angle = targetIKAngles[6];
+        lastJ4Angle = NormalizeAngle(targetIKAngles[3]);
+        lastJ5Angle = NormalizeAngle(targetIKAngles[4]);
+        lastJ6Angle = NormalizeAngle(targetIKAngles[5]);
+        lastJ7Angle = NormalizeAngle(targetIKAngles[6]);
         
         // 自动校准臂长（在初始化姿态之后进行，确保测量时模型在正确位置）
         if (autoCalibrate && visual_J2 && ref_J3_Pivot && ref_J4_Pivot)
@@ -244,6 +246,8 @@ public class RobotIKController : MonoBehaviour
     }
 
     public void StopTracking() { activeTarget = null; isTracking = false; }
+
+    public void SetVrHandle(Transform handle) { vrHandle = handle; }
     
     // 【新增】设置控制模式（供 UI 按钮调用）
     public void SetControlMode(ControlMode mode)
@@ -262,10 +266,10 @@ public class RobotIKController : MonoBehaviour
             }
             
             // 重置连续角度追踪
-            lastJ4Angle = targetIKAngles[3];
-            lastJ5Angle = targetIKAngles[4];
-            lastJ6Angle = targetIKAngles[5];
-            lastJ7Angle = targetIKAngles[6];
+            lastJ4Angle = NormalizeAngle(targetIKAngles[3]);
+            lastJ5Angle = NormalizeAngle(targetIKAngles[4]);
+            lastJ6Angle = NormalizeAngle(targetIKAngles[5]);
+            lastJ7Angle = NormalizeAngle(targetIKAngles[6]);
         }
     }
     
@@ -293,11 +297,11 @@ public class RobotIKController : MonoBehaviour
         currentVelocityPos = Vector3.zero;
         
         // 重置连续角度追踪
-        lastJ4Angle = targetIKAngles[3];
-        lastJ5Angle = targetIKAngles[4];
-        lastJ6Angle = targetIKAngles[5];
-        lastJ7Angle = targetIKAngles[6];
-        
+        lastJ4Angle = NormalizeAngle(targetIKAngles[3]);
+        lastJ5Angle = NormalizeAngle(targetIKAngles[4]);
+        lastJ6Angle = NormalizeAngle(targetIKAngles[5]);
+        lastJ7Angle = NormalizeAngle(targetIKAngles[6]);
+
         // 同步把手到当前姿态，保证后续抓取连续性
         SyncHandleToCurrentPose();
 
@@ -345,7 +349,8 @@ public class RobotIKController : MonoBehaviour
     // 【新增】同步把手到当前 outAngles 对应的末端位置和旋转
     void SyncHandleToCurrentPose()
     {
-        if (activeTarget == null) return;
+        Transform handle = activeTarget != null ? activeTarget : vrHandle;
+        if (handle == null) return;
 
         // 临时应用当前角度到视觉模型，利用 Visual 层级做 FK 读取
         ApplyToVisuals();
@@ -355,8 +360,8 @@ public class RobotIKController : MonoBehaviour
         Quaternion handleRot = visual_J7 != null ? visual_J7.rotation : (visual_J6 != null ? visual_J6.rotation : transform.rotation);
 
         // 将把手移动到对应位置（考虑 gripOffset）
-        activeTarget.position = handlePos - handleRot * gripOffset;
-        activeTarget.rotation = handleRot;
+        handle.position = handlePos - handleRot * gripOffset;
+        handle.rotation = handleRot;
 
         // 同步平滑参数，保证运动连续性
         smoothedInputPos = handlePos;
@@ -483,71 +488,85 @@ public class RobotIKController : MonoBehaviour
     void SolveImprovedIK(Vector3 targetPos, Quaternion targetRot)
     {
         float currentJ1 = targetIKAngles[0];
-        
-        // 将目标旋转转换到底座坐标系
-        Quaternion baseRot = Quaternion.Euler(0, currentJ1, 0);
-        Quaternion wristLocalRot = Quaternion.Inverse(baseRot) * targetRot;
-        
-        // 【重要修改】使用 7-DOF 腕部解算（含 J7）
-        float[] wristAngles = CalculateWristRotationWithJ7(
-            wristLocalRot, 
-            lastJ4Angle, lastJ5Angle, lastJ6Angle, lastJ7Angle
-        );
-        float j4 = wristAngles[0];
-        float j5 = wristAngles[1];
-        float j6 = wristAngles[2];
-        float j7 = wristAngles[3];
-        
-        // 更新连续角度追踪变量
-        lastJ4Angle = j4;
-        lastJ5Angle = j5;
-        lastJ6Angle = j6;
-        lastJ7Angle = j7;
-        
-        // 步骤2：计算腕部偏移（J4→J6，J7 不影响位置）
-        Vector3 wristOffset = CalculateWristOffsetAnalytical(j4, j5, j6);
-        
-        // 将腕部偏移转换到世界空间
-        Vector3 wristOffsetWorld = transform.TransformDirection(wristOffset);
-        
-        // 步骤3：反推 J4 平台目标位置
-        Vector3 platformTarget = targetPos - wristOffsetWorld;
-        
-        // 考虑 J4_Drop_Offset，转换为 J3 尖端目标
-        Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
-        
-        // 步骤4：解算 J1
-        Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
-        float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
-        
-        // J1 死区处理
-        float targetJ1 = currentJ1;
-        if (flatDist > j1DeadZoneRadius)
+
+        // 迭代 3 次以收敛 J1 和 wrist
+        for (int iter = 0; iter < 3; iter++)
         {
-            float rawJ1 = Mathf.Atan2(localTarget.x, localTarget.z) * Mathf.Rad2Deg;
-            float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
-            targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+            // 将目标旋转转换到底座坐标系
+            Quaternion baseRot = Quaternion.Euler(0, currentJ1, 0);
+            Quaternion wristLocalRot = Quaternion.Inverse(baseRot) * targetRot;
+
+            // 使用 7-DOF 腕部解算（含 J7）
+            float[] wristAngles = CalculateWristRotationWithJ7(
+                wristLocalRot,
+                lastJ4Angle, lastJ5Angle, lastJ6Angle, lastJ7Angle
+            );
+            float j4 = wristAngles[0];
+            float j5 = wristAngles[1];
+            float j6 = wristAngles[2];
+            float j7 = wristAngles[3];
+
+            // 步骤2：计算腕部偏移（J4→J6）
+            Vector3 wristOffset = CalculateWristOffsetAnalytical(j4, j5, j6);
+
+            // 将腕部偏移转换到世界空间（包含 J1 旋转）
+            Vector3 wristOffsetWorld = transform.TransformDirection(baseRot * wristOffset);
+
+            // 步骤3：把手对应 J7 末端，先把目标位置转换到 J6 中心
+            Quaternion q4 = Quaternion.Euler(0, j4, 0);
+            Quaternion q5 = Quaternion.Euler(0, 0, j5);
+            Quaternion q6 = Quaternion.Euler(j6, 0, 0);
+            Quaternion j6WorldRot = baseRot * q4 * q5 * q6;
+            Vector3 j6ToJ7World = j6WorldRot * Offset_J6_to_J7;
+            Vector3 j6TargetPos = targetPos - j6ToJ7World;
+
+            // 步骤4：从 J6 中心反推 J4 平台目标位置
+            Vector3 platformTarget = j6TargetPos - wristOffsetWorld;
+
+            // 考虑 J4_Drop_Offset，转换为 J3 尖端目标
+            Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
+
+            // 步骤4：解算 J1
+            Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
+            float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
+
+            // J1 死区处理
+            float targetJ1 = currentJ1;
+            if (flatDist > j1DeadZoneRadius)
+            {
+                float rawJ1 = Mathf.Atan2(localTarget.x, localTarget.z) * Mathf.Rad2Deg;
+                float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
+                targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+            }
+            else if (flatDist > 0.001f)
+            {
+                targetJ1 = currentJ1;
+            }
+
+            targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+            currentJ1 = targetJ1;
+
+            // 步骤5：解算 J2/J3
+            SolveArmPosition(localTarget, targetJ1);
+
+            // 步骤6：赋值 J4-J7
+            targetIKAngles[0] = targetJ1;
+            targetIKAngles[3] = j4;
+            targetIKAngles[4] = j5;
+            targetIKAngles[5] = j6;
+            targetIKAngles[6] = j7;
         }
-        else if (flatDist > 0.001f)
-        {
-            targetJ1 = currentJ1;
-        }
-        
-        targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
-        targetIKAngles[0] = targetJ1;
-        
-        // 步骤5：解算 J2/J3
-        SolveArmPosition(localTarget, targetJ1);
-        
-        // 步骤6：赋值 J4-J7
-        targetIKAngles[3] = j4;
-        targetIKAngles[4] = j5;
-        targetIKAngles[5] = j6;
-        targetIKAngles[6] = j7;
+
+        // 更新连续角度追踪变量（循环结束后统一更新，避免中间迭代污染状态）
+        lastJ4Angle = NormalizeAngle(targetIKAngles[3]);
+        lastJ5Angle = NormalizeAngle(targetIKAngles[4]);
+        lastJ6Angle = NormalizeAngle(targetIKAngles[5]);
+        lastJ7Angle = NormalizeAngle(targetIKAngles[6]);
     }
     
     // 【新增】解析计算腕部偏移（基于实际机械臂几何）
-    // 【修复】把手控制 J6 位置，不包含 J6→J7 偏移
+    // 计算从 J4 平台中心到 J6 腕部中心的偏移（不包含 J6→J7）
+    // J6→J7 的偏移由调用方根据当前姿态单独处理
     Vector3 CalculateWristOffsetAnalytical(float j4, float j5, float j6)
     {
         // 根据机械臂实际轴向构建旋转
@@ -567,67 +586,82 @@ public class RobotIKController : MonoBehaviour
         // J5 到 J6
         offset += q4 * q5 * Offset_J5_to_J6;
         
-        // 【修复】不加上 J6→J7 的偏移，因为把手控制的是 J6 位置
-        // J7 独立控制，不影响位置解算
+        // J6→J7 的偏移由调用方根据当前 J4-J6 姿态单独计算并扣除
+        // 此函数只负责 J4 平台中心 → J6 腕部中心的连杆偏移
         
         return offset;
     }
     
     // ============================================================================
     // 【新增】直接角度映射模式（Direct Angle Mapping）
-    // 把手直接控制 J4 平台位置和 J4-J6 角度
+    // 把手控制 J7 末端位置和姿态，J4-J6 角度由把手旋转映射
     // ============================================================================
     void SolveDirectAngleMapping(Vector3 targetPos, Quaternion targetRot)
     {
-        // 步骤1：直接使用把手位置作为 J4 平台目标位置（无需腕部偏移计算）
-        Vector3 platformTarget = targetPos;
-        
-        // 步骤2：考虑 J4_Drop_Offset，转换为 J3 尖端目标
-        Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
-        
-        // 步骤3：解算 J1
-        Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
-        float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
-        
+        // 先解算 J1，暂时需要 J4-J6 的角度来估计 J6→J7 偏移
+        // 但由于 J4-J6 由 targetRot 决定，我们先用上一帧的角度做初始估计
         float currentJ1 = targetIKAngles[0];
         float targetJ1 = currentJ1;
-        
-        if (flatDist > j1DeadZoneRadius)
+
+        // 步骤1：解算 J1（基于上一帧的 J4-J6 估计 wrist offset）
         {
-            // 正常区域：计算 J1 角度
-            float rawJ1 = Mathf.Atan2(localTarget.x, localTarget.z) * Mathf.Rad2Deg;
-            float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
-            targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+            Quaternion estBaseRot = Quaternion.Euler(0, currentJ1, 0);
+            Quaternion estWristLocalRot = Quaternion.Inverse(estBaseRot) * targetRot;
+
+            float[] estWristAngles = CalculateWristRotationWithJ7(
+                estWristLocalRot,
+                lastJ4Angle, lastJ5Angle, lastJ6Angle, lastJ7Angle
+            );
+            float estJ4 = estWristAngles[0];
+            float estJ5 = estWristAngles[1];
+            float estJ6 = estWristAngles[2];
+
+            Vector3 wristOffset = CalculateWristOffsetAnalytical(estJ4, estJ5, estJ6);
+            Vector3 wristOffsetWorld = transform.TransformDirection(estBaseRot * wristOffset);
+
+            Quaternion q4 = Quaternion.Euler(0, estJ4, 0);
+            Quaternion q5 = Quaternion.Euler(0, 0, estJ5);
+            Quaternion q6 = Quaternion.Euler(estJ6, 0, 0);
+            Quaternion j6WorldRot = estBaseRot * q4 * q5 * q6;
+            Vector3 j6ToJ7World = j6WorldRot * Offset_J6_to_J7;
+            Vector3 j6TargetPos = targetPos - j6ToJ7World;
+
+            Vector3 platformTarget = j6TargetPos - wristOffsetWorld;
+            Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
+            Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
+            float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
+
+            if (flatDist > j1DeadZoneRadius)
+            {
+                float rawJ1 = Mathf.Atan2(localTarget.x, localTarget.z) * Mathf.Rad2Deg;
+                float zoneFactor = Mathf.Clamp01((flatDist - j1DeadZoneRadius) / (j1SoftDeadZone - j1DeadZoneRadius + 0.001f));
+                targetJ1 = Mathf.LerpAngle(currentJ1, rawJ1, zoneFactor);
+            }
+
+            targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+            targetIKAngles[0] = targetJ1;
+            SolveArmPosition(localTarget, targetJ1);
         }
-        // 死区内保持 currentJ1 不变
-        
-        targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
-        targetIKAngles[0] = targetJ1;
-        
-        // 步骤4：解算 J2/J3
-        SolveArmPosition(localTarget, targetJ1);
-        
-        // 步骤5：76f4接角度映射 - 【重要修改】使用 7-DOF 腕部解算
-        // 将把手旋转从世界空间转换到底座坐标系
+
+        // 步骤2：使用收敛后的 J1 重新解算腕部角度
         Quaternion baseRot = Quaternion.Euler(0, targetJ1, 0);
         Quaternion wristLocalRot = Quaternion.Inverse(baseRot) * targetRot;
-        
-        // 使用 7-DOF 腕部解算（含 J7）
+
         float[] wristAngles = CalculateWristRotationWithJ7(
-            wristLocalRot, 
+            wristLocalRot,
             lastJ4Angle, lastJ5Angle, lastJ6Angle, lastJ7Angle
         );
         float j4 = wristAngles[0];
         float j5 = wristAngles[1];
         float j6 = wristAngles[2];
         float j7 = wristAngles[3];
-        
+
         // 更新连续角度追踪
-        lastJ4Angle = j4;
-        lastJ5Angle = j5;
-        lastJ6Angle = j6;
-        lastJ7Angle = j7;
-        
+        lastJ4Angle = NormalizeAngle(j4);
+        lastJ5Angle = NormalizeAngle(j5);
+        lastJ6Angle = NormalizeAngle(j6);
+        lastJ7Angle = NormalizeAngle(j7);
+
         // 应用角度到目标
         targetIKAngles[3] = j4;
         targetIKAngles[4] = j5;
@@ -651,15 +685,24 @@ public class RobotIKController : MonoBehaviour
 
         // 步骤1：计算腕部偏移（基于固定 J4-J6）
         Vector3 wristOffset = CalculateWristOffsetAnalytical(j4, j5, j6);
-        Vector3 wristOffsetWorld = transform.TransformDirection(wristOffset);
+        Quaternion baseRot = Quaternion.Euler(0, currentJ1, 0);
+        Vector3 wristOffsetWorld = transform.TransformDirection(baseRot * wristOffset);
 
-        // 步骤2：反推 J4 平台目标位置
-        Vector3 platformTarget = targetPos - wristOffsetWorld;
+        // 步骤2：把手对应 J7 末端，先把目标位置转换到 J6 中心
+        Quaternion q4 = Quaternion.Euler(0, j4, 0);
+        Quaternion q5 = Quaternion.Euler(0, 0, j5);
+        Quaternion q6 = Quaternion.Euler(j6, 0, 0);
+        Quaternion j6WorldRot = baseRot * q4 * q5 * q6;
+        Vector3 j6ToJ7World = j6WorldRot * Offset_J6_to_J7;
+        Vector3 j6TargetPos = targetPos - j6ToJ7World;
 
-        // 步骤3：考虑 J4_Drop_Offset，转换为 J3 尖端目标
+        // 步骤3：从 J6 中心反推 J4 平台目标位置
+        Vector3 platformTarget = j6TargetPos - wristOffsetWorld;
+
+        // 步骤4：考虑 J4_Drop_Offset，转换为 J3 尖端目标
         Vector3 j3TipTarget = platformTarget + transform.up * J4_Drop_Offset;
 
-        // 步骤4：解算 J1
+        // 步骤5：解算 J1
         Vector3 localTarget = transform.InverseTransformPoint(j3TipTarget);
         float flatDist = new Vector2(localTarget.x, localTarget.z).magnitude;
 
@@ -675,7 +718,7 @@ public class RobotIKController : MonoBehaviour
         targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
         targetIKAngles[0] = targetJ1;
 
-        // 步骤5：解算 J2/J3
+        // 步骤6：解算 J2/J3
         SolveArmPosition(localTarget, targetJ1);
 
         // 步骤6：固定 J4-J7
@@ -685,10 +728,10 @@ public class RobotIKController : MonoBehaviour
         targetIKAngles[6] = j7;
 
         // 更新连续角度追踪
-        lastJ4Angle = j4;
-        lastJ5Angle = j5;
-        lastJ6Angle = j6;
-        lastJ7Angle = j7;
+        lastJ4Angle = NormalizeAngle(j4);
+        lastJ5Angle = NormalizeAngle(j5);
+        lastJ6Angle = NormalizeAngle(j6);
+        lastJ7Angle = NormalizeAngle(j7);
     }
 
     // 【新增】解析旋转分解（针对机械臂轴向优化）
@@ -785,11 +828,11 @@ public class RobotIKController : MonoBehaviour
                 // 代价函数评估
                 float cost = 0;
                 cost += Mathf.Pow(delta * Mathf.Rad2Deg, 2) * 0.1f; // 倾向于Delta=0
-                cost += Mathf.Pow(j4_deg - lastJ4, 2) * 1.0f;
-                cost += Mathf.Pow(j5_deg - lastJ5, 2) * 1.5f; // J5 尽量平缓
-                cost += Mathf.Pow(j6_deg - lastJ6, 2) * 1.0f;
-                cost += Mathf.Pow(j7_deg - lastJ7, 2) * 1.0f;
-                cost += Mathf.Pow(j5_deg - j5HomeAngle, 2) * j5HomeWeight; // J5 软 home 偏好
+                cost += Mathf.Pow(Mathf.DeltaAngle(lastJ4, j4_deg), 2) * 1.0f;
+                cost += Mathf.Pow(Mathf.DeltaAngle(lastJ5, j5_deg), 2) * 1.5f; // J5 尽量平缓
+                cost += Mathf.Pow(Mathf.DeltaAngle(lastJ6, j6_deg), 2) * 1.0f;
+                cost += Mathf.Pow(Mathf.DeltaAngle(lastJ7, j7_deg), 2) * 1.0f;
+                cost += Mathf.Pow(Mathf.DeltaAngle(j5HomeAngle, j5_deg), 2) * j5HomeWeight; // J5 软 home 偏好
 
                 // 限位惩罚（J4 限制在 -90 到 90）
                 if (j4_deg < -90f || j4_deg > 90f) cost += 10000f;
@@ -885,12 +928,12 @@ public class RobotIKController : MonoBehaviour
         }
         
         // 更新连续角度追踪
-        lastJ4Angle = targetIKAngles[3];
-        lastJ5Angle = targetIKAngles[4];
-        lastJ6Angle = targetIKAngles[5];
-        lastJ7Angle = targetIKAngles[6];
+        lastJ4Angle = NormalizeAngle(targetIKAngles[3]);
+        lastJ5Angle = NormalizeAngle(targetIKAngles[4]);
+        lastJ6Angle = NormalizeAngle(targetIKAngles[5]);
+        lastJ7Angle = NormalizeAngle(targetIKAngles[6]);
     }
-    
+
     // 几何解算大臂小臂角度 (三角形余弦定理)
     void SolveArmPosition(Vector3 target, float j1_angle) {
         // shoulderHeight 是 J2 大臂根部在 RobotRoot 本地空间中的固定 Y 高度

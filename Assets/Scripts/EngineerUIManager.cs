@@ -10,9 +10,10 @@ public class EngineerUIManager : MonoBehaviour
     private DataManager data;
 
     [Header("=== 顶部信息 (Top Info) ===")]
-    public TextMeshProUGUI timerText; 
-    public TextMeshProUGUI redScoreText;  
-    public TextMeshProUGUI blueScoreText; 
+    public TextMeshProUGUI timerText;
+    public TextMeshProUGUI redScoreText;
+    public TextMeshProUGUI blueScoreText;
+    public TextMeshProUGUI currentStageText; 
     
     [Header("=== 战场态势 (Battle Status) ===")]
     public Slider myBaseSlider;
@@ -105,11 +106,12 @@ public class EngineerUIManager : MonoBehaviour
         if (data == null) return;
 
         UpdateMatchInfo();
+        UpdateCurrentStage();
         UpdateBuildings();
         UpdateSelf();
-        UpdateTeammates();  
-        UpdateAssemblyUI(); 
-        CheckDamage();      
+        UpdateTeammates();
+        UpdateAssemblyUI();
+        CheckDamage();
     }
 
     void UpdateMatchInfo()
@@ -117,9 +119,28 @@ public class EngineerUIManager : MonoBehaviour
         int min = data.MatchTime / 60;
         int sec = data.MatchTime % 60;
         if(timerText) timerText.text = $"{min:D2}:{sec:D2}";
-        
+
         if(redScoreText) redScoreText.text = data.RedScore.ToString();
         if(blueScoreText) blueScoreText.text = data.BlueScore.ToString();
+    }
+
+    void UpdateCurrentStage()
+    {
+        string stageStr = data.CurrentStage switch
+        {
+            0 => "未开始比赛",
+            1 => "准备阶段",
+            2 => "十五秒裁判系统自检阶段",
+            3 => "五秒倒计时",
+            4 => "比赛中",
+            5 => "比赛结算中",
+            _ => $"未知状态({data.CurrentStage})"
+        };
+
+        if (data.IsPaused)
+            stageStr += " [暂停]";
+
+        if (currentStageText) currentStageText.text = stageStr;
     }
 
     void UpdateBuildings()
@@ -246,7 +267,7 @@ public class EngineerUIManager : MonoBehaviour
 
                 case 4: // 4：上一个装配步骤已完成，可进行下一个装配步骤
                     if (assemblyTitle) assemblyTitle.text = "请进行下一阶段";
-                    if (assemblyDescText) assemblyDescText.text = "底层已反馈触碰，请继续执行指定动作";
+                    if (assemblyDescText) assemblyDescText.text = "请继续执行指定动作";
                     break;
 
                 case 5: // 5：装配步骤已全部完成！
