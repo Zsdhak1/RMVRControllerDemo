@@ -9,7 +9,9 @@
       "Read(//g/UnityProjects/RMVRControllerDemo/**)",
       "Bash(ls -la Assets/Scripts_Backup_20260309_154402/)",
       "mcp__UnityMCP__batch_execute",
-      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.20f1/Editor/Unity.exe\" -quit -batchmode -projectPath \"G:/UnityProjects/RMVRControllerDemo\" -logFile -)"
+      "Bash(\"C:/Program Files/Unity/Hub/Editor/2022.3.20f1/Editor/Unity.exe\" -quit -batchmode -projectPath \"G:/UnityProjects/RMVRControllerDemo\" -logFile -)",
+      "Bash(awk -F'guid: ' '{print $2}')",
+      "Bash(awk -F',' '{print $1}')"
     ]
   }
 }

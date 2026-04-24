@@ -1,5 +1,6 @@
 using UnityEngine;
 using System;
+using TMPro;
 
 [Serializable]
 public class JointConfig
@@ -51,6 +52,33 @@ public class RobotIKController : MonoBehaviour
         PositionOnly            // 仅位置模式：只控制 XYZ，J4-J7 固定
     }
 
+    [Header("=== 4.7 工作空间边界检测模式 ===")]
+    [Tooltip("None=关闭检测，FKValidation=运行时FK验证（推荐），Precomputed=预计算工作空间查表")]
+    public BoundaryCheckMode boundaryCheckMode = BoundaryCheckMode.FKValidation;
+
+    [Tooltip("FK验证模式下的误差阈值（米）。当实际末端与目标位置偏差超过此值时判定为不可达")]
+    public float fkErrorThreshold = 0.05f;
+
+    [Tooltip("预计算工作空间数据（Precomputed模式必填）。若无则自动回退到FKValidation")]
+    public WorkspaceBoundaryData workspaceBoundaryData;
+
+    public enum BoundaryCheckMode
+    {
+        None,           // 关闭边界检测
+        FKValidation,   // 运行时FK验证
+        Precomputed     // 预计算工作空间查表
+    }
+
+    [Header("=== 4.8 工作空间越界提醒 ===")]
+    [Tooltip("超出工作空间时显示的 TMP 文本。留空则不显示提醒")]
+    public TextMeshProUGUI workspaceWarningText;
+
+    [Tooltip("越界提醒文案")]
+    public string outOfBoundsMessage = "⚠ 超出工作空间";
+
+    [Tooltip("越界提醒颜色")]
+    public Color outOfBoundsColor = new Color(1f, 0.4f, 0f, 1f);
+
     [Header("=== 5. 手动控制设置 ===")]
     public float j7RotationSpeed = 90.0f;
 
@@ -99,7 +127,9 @@ public class RobotIKController : MonoBehaviour
     // --- 内部数据变量 ---
     [HideInInspector] public float[] outAngles = new float[7];
     private float[] targetIKAngles = new float[7];
+    private bool isCurrentlyOutOfBounds = false; // 【新增】当前是否处于工作空间外
     private float[] jointVelocities = new float[7]; // 用于 SmoothDamp 的速度缓存
+    private float[] lastValidTargetIKAngles = new float[7]; // 【新增】边界检测：上一帧合法目标角度
 
     private Transform activeTarget = null;
     [Tooltip("VR 把手 Transform，供非抓取状态下同步姿态使用")]
@@ -275,7 +305,27 @@ public class RobotIKController : MonoBehaviour
     
     // 获取当前控制模式（供 UI 检测当前状态）
     public ControlMode GetControlMode() { return controlMode; }
-    
+
+    // ============================================================================
+    // 【新增】工作空间边界检测模式切换 API
+    // ============================================================================
+    public BoundaryCheckMode GetBoundaryCheckMode() { return boundaryCheckMode; }
+
+    public void SetBoundaryCheckMode(BoundaryCheckMode mode)
+    {
+        if (boundaryCheckMode != mode)
+        {
+            boundaryCheckMode = mode;
+            Debug.Log($"[RobotIK] 边界检测模式切换为: {mode}");
+        }
+    }
+
+    public void CycleBoundaryCheckMode()
+    {
+        boundaryCheckMode = (BoundaryCheckMode)(((int)boundaryCheckMode + 1) % 3);
+        Debug.Log($"[RobotIK] 边界检测模式切换为: {boundaryCheckMode}");
+    }
+
     // 【新增】一键重置姿态到初始角度
     public void ResetToInitialPose()
     {
@@ -455,10 +505,67 @@ public class RobotIKController : MonoBehaviour
             }
         }
 
-        // 3. 物理运动模拟 (SmoothDamp)
+        // 3. 工作空间边界检测
+        bool isOutOfBounds = false;
+        if (isTracking && boundaryCheckMode != BoundaryCheckMode.None)
+        {
+            if (boundaryCheckMode == BoundaryCheckMode.FKValidation)
+            {
+                Vector3 fkPos = CalculateEndEffectorPosition(targetIKAngles);
+                float error = Vector3.Distance(fkPos, smoothedInputPos);
+                if (error > fkErrorThreshold)
+                {
+                    isOutOfBounds = true;
+                    Array.Copy(lastValidTargetIKAngles, targetIKAngles, 7);
+                }
+                else
+                {
+                    Array.Copy(targetIKAngles, lastValidTargetIKAngles, 7);
+                }
+            }
+            else if (boundaryCheckMode == BoundaryCheckMode.Precomputed)
+            {
+                if (workspaceBoundaryData != null)
+                {
+                    float shHeight = visual_J2 != null ? visual_J2.localPosition.y : 0f;
+                    Vector3 j2Pos = transform.position + transform.rotation * new Vector3(0, shHeight, 0);
+                    Vector3 localOffset = Quaternion.Inverse(transform.rotation) * (smoothedInputPos - j2Pos);
+                    float relativeHeight = localOffset.y;
+                    float horizontalDistance = Mathf.Sqrt(localOffset.x * localOffset.x + localOffset.z * localOffset.z);
+
+                    if (!workspaceBoundaryData.IsReachable(relativeHeight, horizontalDistance))
+                    {
+                        isOutOfBounds = true;
+                        Array.Copy(lastValidTargetIKAngles, targetIKAngles, 7);
+                    }
+                    else
+                    {
+                        Array.Copy(targetIKAngles, lastValidTargetIKAngles, 7);
+                    }
+                }
+                else
+                {
+                    // 未配置数据时退化为 FK 验证
+                    Vector3 fkPos = CalculateEndEffectorPosition(targetIKAngles);
+                    float error = Vector3.Distance(fkPos, smoothedInputPos);
+                    if (error > fkErrorThreshold)
+                    {
+                        isOutOfBounds = true;
+                        Array.Copy(lastValidTargetIKAngles, targetIKAngles, 7);
+                    }
+                    else
+                    {
+                        Array.Copy(targetIKAngles, lastValidTargetIKAngles, 7);
+                    }
+                }
+            }
+        }
+        UpdateBoundaryWarning(isOutOfBounds);
+
+        // 4. 物理运动模拟 (SmoothDamp)
         SimulatePhysicsMotors();
 
-        // 4. 应用限制和可视化
+        // 5. 应用限制和可视化
         ApplyLimitsAndWarnings();
         ApplyToVisuals();
     }
@@ -544,6 +651,11 @@ public class RobotIKController : MonoBehaviour
             }
 
             targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+
+            // J1 限位
+            if (jointLimits.Length > 0)
+                targetJ1 = Mathf.Clamp(targetJ1, jointLimits[0].minAngle, jointLimits[0].maxAngle);
+
             currentJ1 = targetJ1;
 
             // 步骤5：解算 J2/J3
@@ -639,6 +751,11 @@ public class RobotIKController : MonoBehaviour
             }
 
             targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+
+            // J1 限位
+            if (jointLimits.Length > 0)
+                targetJ1 = Mathf.Clamp(targetJ1, jointLimits[0].minAngle, jointLimits[0].maxAngle);
+
             targetIKAngles[0] = targetJ1;
             SolveArmPosition(localTarget, targetJ1);
         }
@@ -716,6 +833,11 @@ public class RobotIKController : MonoBehaviour
         // 死区内保持 currentJ1 不变
 
         targetJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+
+        // J1 限位
+        if (jointLimits.Length > 0)
+            targetJ1 = Mathf.Clamp(targetJ1, jointLimits[0].minAngle, jointLimits[0].maxAngle);
+
         targetIKAngles[0] = targetJ1;
 
         // 步骤6：解算 J2/J3
@@ -784,6 +906,7 @@ public class RobotIKController : MonoBehaviour
         
         float bestCost = float.MaxValue;
         float[] bestJoints = new float[4];
+        bool foundValid = false;
         
         // 在 -90 到 90 度之间进行离散搜索寻找最优解
         for (int d = -9; d <= 9; d++)
@@ -825,7 +948,17 @@ public class RobotIKController : MonoBehaviour
                 float j6_deg = CalculateContinuousAngleDeg(j6 * Mathf.Rad2Deg, lastJ6);
                 float j7_deg = CalculateContinuousAngleDeg(j7 * Mathf.Rad2Deg, lastJ7);
                 
-                // 代价函数评估
+                // 硬限位检查：超出限位的候选解直接丢弃
+                if (jointLimits.Length > 3 && (j4_deg < jointLimits[3].minAngle || j4_deg > jointLimits[3].maxAngle))
+                    continue;
+                if (jointLimits.Length > 4 && (j5_deg < jointLimits[4].minAngle || j5_deg > jointLimits[4].maxAngle))
+                    continue;
+                if (jointLimits.Length > 5 && (j6_deg < jointLimits[5].minAngle || j6_deg > jointLimits[5].maxAngle))
+                    continue;
+                if (jointLimits.Length > 6 && (j7_deg < jointLimits[6].minAngle || j7_deg > jointLimits[6].maxAngle))
+                    continue;
+
+                // 代价函数评估（只评估限位内的候选解）
                 float cost = 0;
                 cost += Mathf.Pow(delta * Mathf.Rad2Deg, 2) * 0.1f; // 倾向于Delta=0
                 cost += Mathf.Pow(Mathf.DeltaAngle(lastJ4, j4_deg), 2) * 1.0f;
@@ -834,12 +967,6 @@ public class RobotIKController : MonoBehaviour
                 cost += Mathf.Pow(Mathf.DeltaAngle(lastJ7, j7_deg), 2) * 1.0f;
                 cost += Mathf.Pow(Mathf.DeltaAngle(j5HomeAngle, j5_deg), 2) * j5HomeWeight; // J5 软 home 偏好
 
-                // 限位惩罚（J4 限制在 -90 到 90）
-                if (j4_deg < -90f || j4_deg > 90f) cost += 10000f;
-                if (jointLimits.Length > 3 && (j5_deg < jointLimits[4].minAngle || j5_deg > jointLimits[4].maxAngle)) cost += 5000f;
-                if (jointLimits.Length > 4 && (j6_deg < jointLimits[5].minAngle || j6_deg > jointLimits[5].maxAngle)) cost += 5000f;
-                if (jointLimits.Length > 5 && (j7_deg < jointLimits[6].minAngle || j7_deg > jointLimits[6].maxAngle)) cost += 5000f;
-                
                 if (cost < bestCost)
                 {
                     bestCost = cost;
@@ -847,12 +974,23 @@ public class RobotIKController : MonoBehaviour
                     bestJoints[1] = j5_deg;
                     bestJoints[2] = j6_deg;
                     bestJoints[3] = j7_deg;
+                    foundValid = true;
                 }
             }
         }
+
+        // 如果没有找到任何限位内的候选解，保持当前角度不变
+        if (!foundValid)
+        {
+            bestJoints[0] = lastJ4;
+            bestJoints[1] = lastJ5;
+            bestJoints[2] = lastJ6;
+            bestJoints[3] = lastJ7;
+        }
+
         return bestJoints;
     }
-    
+
     // 辅助方法：计算连续角度（度数）
     float CalculateContinuousAngleDeg(float target, float current)
     {
@@ -915,8 +1053,13 @@ public class RobotIKController : MonoBehaviour
             // 死区内保持 currentJ1 不变
 
             currentJ1 = Mathf.LerpAngle(currentJ1, targetJ1, iterationDamping);
+
+            // J1 限位
+            if (jointLimits.Length > 0)
+                currentJ1 = Mathf.Clamp(currentJ1, jointLimits[0].minAngle, jointLimits[0].maxAngle);
+
             targetIKAngles[0] = currentJ1;
-            
+
             // J2/J3 几何解算（使用原始目标）
             SolveArmPosition(rootLocalTarget, currentJ1);
 
@@ -954,11 +1097,8 @@ public class RobotIKController : MonoBehaviour
         float maxReach = L1_BigArm + L2_SmallArm;
         if (D > maxReach)
         {
-            // 目标超出可达范围，缩放到最大距离
-            float scale = maxReach / D;
-            flatDist *= scale;
-            y *= scale;
-            D = maxReach;
+            // 目标超出工作空间，保持 J2/J3 不变（大臂小臂冻结）
+            return;
         }
         D = Mathf.Max(D, 0.01f); // 避免除零
 
@@ -980,32 +1120,39 @@ public class RobotIKController : MonoBehaviour
         float j2Angle = (beta + alpha) * Mathf.Rad2Deg;
         float j3Angle = (Mathf.PI - gamma) * Mathf.Rad2Deg;
         
-        // 【修复】J3 限位：直接通过几何计算小臂绝对角度，不依赖 J2
+        // J3 限位：直接通过几何计算小臂绝对角度
         // 小臂绝对角度 = 目标方向角 beta + 大臂偏角 alpha - (两臂夹角补角 180-gamma)
         //              = beta + alpha + gamma - 180°
         if (jointLimits.Length > 2)
         {
             JointConfig j3Limit = jointLimits[2];
-            
+
             // 直接从三角几何计算小臂绝对角度，不使用 j2Angle 或 j3Angle
             float absoluteAngle = (beta + alpha + gamma - Mathf.PI) * Mathf.Rad2Deg;
-            
+
             // 硬限位：如果超出范围，重新计算 J3
             if (absoluteAngle < j3Limit.minAngle)
             {
-                // 小臂太低，需要抬起
                 float targetGamma = (j3Limit.minAngle * Mathf.Deg2Rad - beta - alpha + Mathf.PI);
-                // 限制 gamma 在有效范围内 [0, π]
                 targetGamma = Mathf.Clamp(targetGamma, 0.01f, Mathf.PI - 0.01f);
                 j3Angle = (Mathf.PI - targetGamma) * Mathf.Rad2Deg;
             }
             else if (absoluteAngle > j3Limit.maxAngle)
             {
-                // 小臂太高，需要压低
                 float targetGamma = (j3Limit.maxAngle * Mathf.Deg2Rad - beta - alpha + Mathf.PI);
                 targetGamma = Mathf.Clamp(targetGamma, 0.01f, Mathf.PI - 0.01f);
                 j3Angle = (Mathf.PI - targetGamma) * Mathf.Rad2Deg;
             }
+        }
+
+        // J2 限位检查
+        if (jointLimits.Length > 1)
+        {
+            JointConfig j2Limit = jointLimits[1];
+            if (j2Angle < j2Limit.minAngle)
+                j2Angle = j2Limit.minAngle;
+            else if (j2Angle > j2Limit.maxAngle)
+                j2Angle = j2Limit.maxAngle;
         }
 
         targetIKAngles[1] = j2Angle;
@@ -1062,6 +1209,12 @@ public class RobotIKController : MonoBehaviour
             ClampSingleJoint(i);
             UpdateLimitVisual(i);
         }
+
+        // 【关键修复】同步连续角度追踪变量，确保腕部解算基于正确的状态
+        lastJ4Angle = NormalizeAngle(targetIKAngles[3]);
+        lastJ5Angle = NormalizeAngle(targetIKAngles[4]);
+        lastJ6Angle = NormalizeAngle(targetIKAngles[5]);
+        lastJ7Angle = NormalizeAngle(targetIKAngles[6]);
     }
     
     void ClampSingleJoint(int index) {
@@ -1073,6 +1226,8 @@ public class RobotIKController : MonoBehaviour
             angle = Mathf.Clamp(angle, limit.minAngle, limit.maxAngle);
         }
         outAngles[index] = angle;
+        // 【关键修复】同步 targetIKAngles，防止解算器内部状态与实际输出脱节
+        targetIKAngles[index] = angle;
     }
     
     void UpdateLimitVisual(int index) {
@@ -1108,6 +1263,73 @@ public class RobotIKController : MonoBehaviour
         if(visual_J5) visual_J5.localRotation = Quaternion.Euler(0, 0, outAngles[4]);
         if(visual_J6) visual_J6.localRotation = Quaternion.Euler(outAngles[5], 0, 0);
         if(visual_J7) visual_J7.localRotation = Quaternion.Euler(0, 0, outAngles[6]);
+    }
+
+    // ============================================================================
+    // 【新增】正向运动学（FK）：根据关节角度计算末端位置
+    // ============================================================================
+    Vector3 CalculateEndEffectorPosition(float[] angles)
+    {
+        float j2 = invert_J2 ? angles[1] : -angles[1];
+        float j3 = invert_J3 ? angles[2] : -angles[2];
+
+        Quaternion baseRot = transform.rotation;
+        Quaternion q1 = Quaternion.Euler(0, angles[0], 0);
+        Quaternion q2 = Quaternion.Euler(j2, 0, 0);
+        Quaternion q3 = Quaternion.Euler(j3, 0, 0);
+        Quaternion q4 = Quaternion.Euler(0, angles[3], 0);
+        Quaternion q5 = Quaternion.Euler(0, 0, angles[4]);
+        Quaternion q6 = Quaternion.Euler(angles[5], 0, 0);
+
+        // J2 位置（底座上方 shoulderHeight）
+        float shHeight = visual_J2 != null ? visual_J2.localPosition.y : 0f;
+        Vector3 j2Pos = transform.position + baseRot * new Vector3(0, shHeight, 0);
+
+        // 大臂
+        Vector3 bigArmDir = baseRot * q1 * q2 * Vector3.forward;
+        Vector3 j3Pos = j2Pos + bigArmDir * L1_BigArm;
+
+        // 小臂
+        Vector3 smallArmDir = baseRot * q1 * q2 * q3 * Vector3.forward;
+        Vector3 j3Tip = j3Pos + smallArmDir * L2_SmallArm;
+
+        // J4 平台（考虑 J4_Drop_Offset）
+        Vector3 platformPos = j3Tip - transform.up * J4_Drop_Offset;
+
+        // 腕部连杆偏移
+        Vector3 j5Pos = platformPos + baseRot * q1 * q4 * Offset_J4_to_J5;
+        Vector3 j6Pos = j5Pos + baseRot * q1 * q4 * q5 * Offset_J5_to_J6;
+        Vector3 j7End = j6Pos + baseRot * q1 * q4 * q5 * q6 * Offset_J6_to_J7;
+
+        return j7End;
+    }
+
+    // ============================================================================
+    // 【新增】工作空间越界提醒 UI 更新
+    // ============================================================================
+    void UpdateBoundaryWarning(bool isOutOfBounds)
+    {
+        if (workspaceWarningText == null) return;
+
+        if (isOutOfBounds)
+        {
+            if (!isCurrentlyOutOfBounds)
+            {
+                // 刚刚进入越界状态
+                workspaceWarningText.text = outOfBoundsMessage;
+                workspaceWarningText.color = outOfBoundsColor;
+                isCurrentlyOutOfBounds = true;
+            }
+        }
+        else
+        {
+            if (isCurrentlyOutOfBounds)
+            {
+                // 刚刚恢复到达范围内
+                workspaceWarningText.text = "";
+                isCurrentlyOutOfBounds = false;
+            }
+        }
     }
 
     float NormalizeAngle(float a) {

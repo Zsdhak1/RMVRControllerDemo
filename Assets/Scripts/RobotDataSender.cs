@@ -42,6 +42,11 @@ public class RobotDataSender : MonoBehaviour
         UInt8Mapped
     }
 
+    /// <summary>
+    /// 数据发送事件：每次 PackAndSend 成功后触发，参数为 7 个轴的角度数组（度）
+    /// </summary>
+    public static event System.Action<float[]> OnDataSent;
+
     // 内部计时器
     private float sendInterval;
     private float sendTimer;
@@ -76,7 +81,8 @@ public class RobotDataSender : MonoBehaviour
             // === 原有方案：7 个关节角度用 short ×100 定点数 (Byte 0~13) ===
             for (int i = 0; i < 7; i++)
             {
-                short val = (short)(sourceAngles[i] * 100f);
+                float angle = (i == 6) ? -sourceAngles[i] : sourceAngles[i]; // J7 取反
+                short val = (short)(angle * 100f);
                 byte[] b = BitConverter.GetBytes(val);
                 dataPacket[i * 2] = b[0];
                 dataPacket[i * 2 + 1] = b[1];
@@ -104,7 +110,7 @@ public class RobotDataSender : MonoBehaviour
             // 解码：sign * (|Byte0|*10 + Byte2 + Byte1/100)
             for (int i = 0; i < 7; i++)
             {
-                float angle = sourceAngles[i];
+                float angle = (i == 6) ? -sourceAngles[i] : sourceAngles[i]; // J7 取反
                 int baseIdx = i * 3;
                 sbyte b0 = (sbyte)(angle / 10f);
                 byte b1 = (byte)((Mathf.Abs(angle) % 1f) * 100f);
@@ -125,5 +131,8 @@ public class RobotDataSender : MonoBehaviour
         RoboMaster.CustomControl controlMsg = new RoboMaster.CustomControl();
         controlMsg.Data = ByteString.CopyFrom(dataPacket);
         DataManager.Instance.SendCustomControl(controlMsg);
+
+        // 触发发送事件（供图表等外部组件订阅）
+        OnDataSent?.Invoke(sourceAngles);
     }
 }

@@ -83,6 +83,7 @@ public class RobotIKModeButton : MonoBehaviour
         PreviousPose,               // 切换到上一个姿态（循环）
         SetPoseByIndex,             // 按 targetPoseIndex 设置指定姿态
         TogglePositionOnlyMode,     // 切换仅位置模式（J4-J7 固定）
+        ToggleBoundaryCheck,        // 循环切换边界检测模式
     }
 
     void Awake()
@@ -116,7 +117,8 @@ public class RobotIKModeButton : MonoBehaviour
     {
         if (buttonFunction == ButtonFunction.SetIKMode ||
             buttonFunction == ButtonFunction.SetDirectMode ||
-            buttonFunction == ButtonFunction.TogglePositionOnlyMode)
+            buttonFunction == ButtonFunction.TogglePositionOnlyMode ||
+            buttonFunction == ButtonFunction.ToggleBoundaryCheck)
         {
             UpdateVisualState();
         }
@@ -180,6 +182,12 @@ public class RobotIKModeButton : MonoBehaviour
                 ikController.TogglePositionOnlyMode();
                 var posMode = ikController.GetControlMode();
                 Debug.Log($"[RobotIKModeButton] {(posMode == RobotIKController.ControlMode.PositionOnly ? "已进入" : "已退出")}仅位置模式");
+                break;
+
+            case ButtonFunction.ToggleBoundaryCheck:
+                ikController.CycleBoundaryCheckMode();
+                var bcMode = ikController.GetBoundaryCheckMode();
+                Debug.Log($"[RobotIKModeButton] 边界检测模式切换为: {bcMode}");
                 break;
         }
 
@@ -266,10 +274,22 @@ public class RobotIKModeButton : MonoBehaviour
                     buttonText.text = isActive ? "[仅位置] ON" : "仅位置模式";
                 }
                 break;
+
+            case ButtonFunction.ToggleBoundaryCheck:
+                var bcMode = ikController.GetBoundaryCheckMode();
+                isActive = (bcMode != RobotIKController.BoundaryCheckMode.None);
+                if (buttonText != null)
+                {
+                    string bcLabel = bcMode == RobotIKController.BoundaryCheckMode.FKValidation ? "FK验证"
+                                   : bcMode == RobotIKController.BoundaryCheckMode.Precomputed ? "预计算"
+                                   : "关闭";
+                    buttonText.text = isActive ? $"[边界] {bcLabel}" : $"边界: {bcLabel}";
+                }
+                break;
         }
 
         // 更新高亮颜色（模式按钮需要）
-        if (highlightImage != null && (buttonFunction == ButtonFunction.SetIKMode || buttonFunction == ButtonFunction.SetDirectMode || buttonFunction == ButtonFunction.TogglePositionOnlyMode))
+        if (highlightImage != null && (buttonFunction == ButtonFunction.SetIKMode || buttonFunction == ButtonFunction.SetDirectMode || buttonFunction == ButtonFunction.TogglePositionOnlyMode || buttonFunction == ButtonFunction.ToggleBoundaryCheck))
         {
             highlightImage.color = isActive ? activeColor : inactiveColor;
         }
